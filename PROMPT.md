@@ -27,8 +27,8 @@ The script must load parameters from a `config.json` file in the working directo
 ```json
 {
   "children": [
-    { "name": "Byron", "dependent_id": "673e065a9d37c9fab2483b2d" },
-    { "name": "Catherine", "dependent_id": "6322019106aa0d39b230f4a0" }
+    { "name": "Alice", "dependent_id": "123abc123abc123abc" },
+    { "name": "Bob", "dependent_id": "234bcd234bcd23bcd23bcd" }
   ],
   "user_data_dir": "./user_data",
   "downloads_dir": "./downloads"

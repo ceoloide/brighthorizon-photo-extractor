@@ -100,41 +100,26 @@ Based on your selected layout mode:
 ```text
 downloads/
 ├── manifest.json            # Keeps track of downloaded image IDs to prevent duplicates
-├── Byron/
-│   ├── Byron 2026-06-22 (1).jpg
-│   └── Byron 2026-06-21 (1).jpg
-└── Catherine/
-    ├── Catherine 2026-06-22 (1).jpg
-    ├── Catherine 2026-06-22 (2).jpg  # Handles multiple images on the same day
-    └── Catherine 2026-06-20 (1).jpg
+├── Child1/
+│   ├── Child1 2026-06-22 (1).jpg
+│   └── Child1 2026-06-21 (1).jpg
+└── Child2/
+    ├── Child2 2026-06-22 (1).jpg
+    ├── Child2 2026-06-22 (2).jpg  # Handles multiple images on the same day
+    └── Child2 2026-06-20 (1).jpg
 ```
 
 ### Nested Layout (`--nest`)
 ```text
 downloads/
 ├── manifest.json
-├── Byron/
+├── Child1/
 │   └── 2026/
 │       └── 06/
-│           └── Byron 2026-06-22 (1).png
-└── Catherine/
+│           └── Child1 2026-06-22 (1).png
+└── Child2/
     └── 2026/
         └── 06/
-            ├── Catherine 2026-06-22 (1).png
-            └── Catherine 2026-06-22 (2).png
+            ├── Child2 2026-06-22 (1).png
+            └── Child2 2026-06-22 (2).png
 ```
-
----
-
-## Folder Organization Utility
-
-The repository includes a standalone `organize_folders.py` utility that can be run independently to reorganize files on disk without launching Playwright:
-
-* **To Flatten Folders:**
-  ```bash
-  uv run organize_folders.py --flat
-  ```
-* **To Nest Folders:**
-  ```bash
-  uv run organize_folders.py --nest
-  ```
