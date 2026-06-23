@@ -57,11 +57,6 @@ Verifies all files on disk against the manifest, updates EXIF comments (JPEGs) a
   uv run main.py --verify --nest
   ```
 
-### 4. Layout Reorganization (Offline Utility)
-If you need to flat-organize or nest files without running Playwright:
-* **Flatten Folders:** `uv run organize_folders.py --flat`
-* **Nest Folders:** `uv run organize_folders.py --nest`
-
 ## Operational Guidelines & Gotchas
 
 1. **Auto-Detection of Children:** On first run (or when `config.json` has no valid `children` entries), the script navigates to the dashboard and scrapes child names and `dependent_id`s from the child selector bar. Discovered children are persisted to `config.json` so subsequent runs are fast and offline-capable for the children list.
