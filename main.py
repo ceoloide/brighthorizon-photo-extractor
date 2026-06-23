@@ -421,6 +421,61 @@ def scroll_to_bottom(page):
         last_height = new_height
         print(f"      Scroll position: {last_height}px")
 
+def discover_children(page):
+    """
+    Auto-detects children (name + dependent_id) from the Bright Horizons dashboard.
+    The child selector bar at the top of the page contains <li> elements with
+    links like /dashboard/parents.html?dependent_id=<ID> for each child.
+    Returns a list of dicts: [{"name": str, "dependent_id": str}, ...]
+    """
+    print("   Auto-detecting children from dashboard...")
+    
+    # Navigate to the main dashboard to ensure the child selector bar is present
+    if 'parents.html' not in page.url and 'dashboard' not in page.url:
+        page.goto("https://mybrightday.brighthorizons.com/dashboard/parents.html")
+        page.wait_for_timeout(4000)
+    
+    children = page.evaluate("""
+        () => {
+            const results = [];
+            const seen_ids = new Set();
+
+            // Strategy 1: look for links with dependent_id in href
+            document.querySelectorAll('a[href*="dependent_id"]').forEach(a => {
+                const href = a.getAttribute('href') || '';
+                const match = href.match(/[?&]dependent_id=([^&]+)/);
+                if (!match) return;
+                const dep_id = match[1].trim();
+                if (!dep_id || seen_ids.has(dep_id)) return;
+
+                // Prefer the text of the link itself; skip 'All' / 'All Kids' entries
+                let name = (a.innerText || a.textContent || '').trim();
+
+                // Some portals wrap the name in a child element
+                if (!name) {
+                    const span = a.querySelector('span, div');
+                    if (span) name = (span.innerText || span.textContent || '').trim();
+                }
+
+                // Skip generic 'All' / 'All Kids' selector entries
+                if (!name || /^all(\s+kids)?$/i.test(name)) return;
+
+                seen_ids.add(dep_id);
+                results.push({ name, dependent_id: dep_id });
+            });
+
+            return results;
+        }
+    """)
+    
+    if children:
+        print(f"   Discovered {len(children)} child(ren): {[c['name'] for c in children]}")
+    else:
+        print("   Warning: Could not auto-detect children from the dashboard.")
+    
+    return children
+
+
 def scrape_photos_and_text(page):
     """
     Finds all photo attachment URLs (matching obj_attachment) on the page,
@@ -569,8 +624,34 @@ def main():
                 sys.exit(1)
         else:
             print("Already logged in!")
-            
-        for child in config['children']:
+
+        # Auto-detect children if not specified or empty in config
+        configured_children = config.get('children', [])
+        # Filter out placeholder entries (dependent_id still contains 'INSERT_')
+        valid_children = [
+            c for c in configured_children
+            if c.get('dependent_id') and 'INSERT_' not in c.get('dependent_id', '')
+        ]
+
+        if not valid_children:
+            print("\nNo valid children found in config.json. Attempting auto-detection...")
+            valid_children = discover_children(page)
+            if not valid_children:
+                print("Error: Could not auto-detect children and none are configured. Exiting.")
+                context.close()
+                sys.exit(1)
+            # Save discovered children back to config.json for future runs
+            config['children'] = valid_children
+            try:
+                with open('config.json', 'w') as f:
+                    json.dump(config, f, indent=2)
+                print(f"   Saved {len(valid_children)} discovered child(ren) to config.json.")
+            except Exception as e:
+                print(f"   Warning: Could not save discovered children to config.json: {e}")
+        else:
+            print(f"\nUsing {len(valid_children)} configured child(ren): {[c['name'] for c in valid_children]}")
+
+        for child in valid_children:
             child_name = child['name']
             dep_id = child['dependent_id']
             

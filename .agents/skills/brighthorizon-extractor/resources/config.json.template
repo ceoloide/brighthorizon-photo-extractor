@@ -1,14 +1,4 @@
 {
-  "children": [
-    {
-      "name": "Byron",
-      "dependent_id": "INSERT_BYRON_DEPENDENT_ID_HERE"
-    },
-    {
-      "name": "Catherine",
-      "dependent_id": "INSERT_CATHERINE_DEPENDENT_ID_HERE"
-    }
-  ],
   "user_data_dir": "./user_data",
   "downloads_dir": "./downloads"
 }
