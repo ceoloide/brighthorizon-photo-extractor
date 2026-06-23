@@ -1,0 +1,14 @@
+{
+  "children": [
+    {
+      "name": "Byron",
+      "dependent_id": "673e065a9d37c9fab2483b2d"
+    },
+    {
+      "name": "Catherine",
+      "dependent_id": "6322019106aa0d39b230f4a0"
+    }
+  ],
+  "user_data_dir": "./user_data",
+  "downloads_dir": "./downloads"
+}

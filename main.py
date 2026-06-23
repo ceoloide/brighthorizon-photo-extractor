@@ -421,58 +421,202 @@ def scroll_to_bottom(page):
         last_height = new_height
         print(f"      Scroll position: {last_height}px")
 
-def discover_children(page):
+def discover_children(page, context):
     """
-    Auto-detects children (name + dependent_id) from the Bright Horizons dashboard.
-    The child selector bar at the top of the page contains <li> elements with
-    links like /dashboard/parents.html?dependent_id=<ID> for each child.
+    Auto-detects children (name + dependent_id) from the Bright Horizons portal.
+
+    Strategy 1: Navigate to familyinfocenter.brighthorizons.com/home and scrape
+                the "My Bright Day" action links. These are plain <a href> links
+                containing ?dependent_id=<ID>, with the child name in the
+                surrounding card heading.
+    Strategy 2: Fallback — network interception on the mybrightday SPA dashboard.
+
     Returns a list of dicts: [{"name": str, "dependent_id": str}, ...]
     """
-    print("   Auto-detecting children from dashboard...")
+    print("   Auto-detecting children from Bright Horizons family portal...")
     
-    # Navigate to the main dashboard to ensure the child selector bar is present
-    if 'parents.html' not in page.url and 'dashboard' not in page.url:
-        page.goto("https://mybrightday.brighthorizons.com/dashboard/parents.html")
-        page.wait_for_timeout(4000)
-    
-    children = page.evaluate("""
-        () => {
-            const results = [];
-            const seen_ids = new Set();
+    # --- Strategy 1: familyinfocenter — click each "Actions" span (Angular component),
+    # then read the "My Bright Day" href which contains the dependent_id.
+    # The dropdown is dynamically rendered so links are not in the DOM until opened.
+    # Children without an active enrollment (e.g. Elizabeth) won't have a My Bright Day
+    # link in their dropdown, so they are naturally skipped.
+    print("   Navigating to family info center home...")
+    page.goto("https://familyinfocenter.brighthorizons.com/home")
+    page.wait_for_timeout(5000)
 
-            // Strategy 1: look for links with dependent_id in href
-            document.querySelectorAll('a[href*="dependent_id"]').forEach(a => {
-                const href = a.getAttribute('href') || '';
-                const match = href.match(/[?&]dependent_id=([^&]+)/);
-                if (!match) return;
-                const dep_id = match[1].trim();
-                if (!dep_id || seen_ids.has(dep_id)) return;
+    children = []
+    seen_ids = set()
 
-                // Prefer the text of the link itself; skip 'All' / 'All Kids' entries
-                let name = (a.innerText || a.textContent || '').trim();
+    # The "Actions" trigger is a <span> inside an Angular component (not a <button>)
+    actions_buttons = page.locator("span", has_text="Actions").all()
+    print(f"   Found {len(actions_buttons)} child card(s) with Actions menu.")
 
-                // Some portals wrap the name in a child element
-                if (!name) {
-                    const span = a.querySelector('span, div');
-                    if (span) name = (span.innerText || span.textContent || '').trim();
+    for btn in actions_buttons:
+        try:
+            # Get the child name from the H1 heading in the card (before opening dropdown)
+            card_name = btn.evaluate("""
+                (el) => {
+                    let node = el.parentElement;
+                    while (node && node !== document.body) {
+                        const h = node.querySelector('h1, h2, h3, h4, h5, h6');
+                        if (h) return (h.innerText || h.textContent || '').trim();
+                        node = node.parentElement;
+                    }
+                    return '';
                 }
+            """)
 
-                // Skip generic 'All' / 'All Kids' selector entries
-                if (!name || /^all(\s+kids)?$/i.test(name)) return;
+            # Click the Actions span to open the dropdown
+            btn.click()
+            page.wait_for_timeout(1500)
 
-                seen_ids.add(dep_id);
-                results.push({ name, dependent_id: dep_id });
+            # The dropdown items are <span class="actions-menu-item-label"> inside a
+            # CDK overlay. We must target that class specifically — the generic
+            # "text=My Bright Day" locator matches the promotional h4 banner instead.
+            mbd = page.locator("span.actions-menu-item-label", has_text="My Bright Day").first
+            try:
+                mbd.wait_for(state="visible", timeout=3000)
+            except Exception:
+                # No "My Bright Day" option in this dropdown — child not enrolled, skip
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(500)
+                continue
+
+            # Clicking the span's parent (the actual <a> or <button>) opens a new tab
+            # with the dependent_id in the URL. Capture that tab.
+            with context.expect_page() as new_page_info:
+                mbd.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
+
+            new_page = new_page_info.value
+            new_page.wait_for_load_state("domcontentloaded", timeout=10000)
+            new_url = new_page.url
+            new_page.close()
+
+            m = re.search(r'dependent_id=([^&]+)', new_url)
+            if not m:
+                continue
+
+            dep_id = m.group(1)
+            if dep_id in seen_ids:
+                continue
+
+            # Clean up the child name: strip possessive, take first word, capitalize
+            name = card_name.replace("'s", "").strip() if card_name else ""
+            first_word = re.split(r"[\s\-\u2013,]+", name)[0] if name else ""
+            name = first_word[0].upper() + first_word[1:].lower() if first_word else ""
+
+            if not name:
+                print(f"   Warning: found dependent_id={dep_id} but could not extract child name.")
+                continue
+
+            seen_ids.add(dep_id)
+            children.append({"name": name, "dependent_id": dep_id})
+            print(f"   Found: {name} -> {dep_id}")
+
+        except Exception as e:
+            print(f"   Warning: error processing Actions card: {e}")
+            try:
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(500)
+            except Exception:
+                pass
+            continue
+
+
+    if children:
+        print(f"   Discovered {len(children)} child(ren) via family portal.")
+        return children
+
+    print("   No href links found on family portal — falling back to network interception...")
+
+    # Navigate to the mybrightday dashboard for Strategy 2
+    page.goto("https://mybrightday.brighthorizons.com/dashboard/parents.html")
+    page.wait_for_timeout(5000)
+
+
+
+    # Collect candidate selector li items: skip media items (a.fancybox) and month tiles
+    selector_items = page.evaluate("""
+        () => {
+            const items = [];
+            let globalIdx = 0;
+            document.querySelectorAll('ul.thumbnails').forEach(list => {
+                list.querySelectorAll('li').forEach(li => {
+                    if (li.querySelector('a.fancybox')) { globalIdx++; return; }
+                    const text = (li.innerText || li.textContent || '').trim();
+                    const cleaned = text.replace(/\\s+/g, ' ');
+                    if (/^[a-z]{3} \\d{4}$/i.test(cleaned)) { globalIdx++; return; }
+                    items.push({ globalIdx, text });
+                    globalIdx++;
+                });
             });
-
-            return results;
+            return items;
         }
     """)
-    
+
+    if not selector_items:
+        print("   Warning: Could not find any candidate items to probe.")
+        return []
+
+    print(f"   Found {len(selector_items)} candidate item(s) to probe.")
+
+    children = []
+    seen_ids = set()
+
+    for item in selector_items:
+        raw_text = item['text']
+        global_idx = item['globalIdx']
+
+        # Intercept network requests fired when this tile is clicked
+        captured_ids = []
+
+        def on_request(request, _captured=captured_ids):
+            m = re.search(r'dependent_id=([^&]+)', request.url)
+            if m:
+                _captured.append(m.group(1))
+
+        page.on('request', on_request)
+
+        page.evaluate("""
+            (targetIdx) => {
+                let globalIdx = 0;
+                for (const list of document.querySelectorAll('ul.thumbnails')) {
+                    for (const li of list.querySelectorAll('li')) {
+                        if (globalIdx === targetIdx) {
+                            const clickable = li.querySelector('div.tile') || li.querySelector('div') || li;
+                            clickable.click();
+                            return true;
+                        }
+                        globalIdx++;
+                    }
+                }
+                return false;
+            }
+        """, global_idx)
+
+        page.wait_for_timeout(2500)
+        page.remove_listener('request', on_request)
+
+        if not captured_ids:
+            continue  # All Kids / months / non-child items fire no child-specific requests
+
+        dep_id = captured_ids[0]
+        if dep_id in seen_ids:
+            continue
+
+        # Clean name: drop single-letter prefix lines (e.g. "B" avatar initial)
+        lines = [l.strip() for l in raw_text.splitlines() if len(l.strip()) > 1]
+        name = lines[0] if lines else raw_text.strip()
+
+        seen_ids.add(dep_id)
+        children.append({"name": name, "dependent_id": dep_id})
+        print(f"   Found: {name} -> {dep_id}")
+
     if children:
         print(f"   Discovered {len(children)} child(ren): {[c['name'] for c in children]}")
     else:
         print("   Warning: Could not auto-detect children from the dashboard.")
-    
+
     return children
 
 
@@ -635,7 +779,7 @@ def main():
 
         if not valid_children:
             print("\nNo valid children found in config.json. Attempting auto-detection...")
-            valid_children = discover_children(page)
+            valid_children = discover_children(page, context)
             if not valid_children:
                 print("Error: Could not auto-detect children and none are configured. Exiting.")
                 context.close()
