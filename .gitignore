@@ -1,0 +1,25 @@
+# Downloads and manifest data
+downloads/
+
+# Playwright browser profiles (sensitive login sessions and locks)
+user_data/
+user_data_copy/
+
+# Local credentials / private IDs config
+config.json
+
+# Python virtual envs
+venv/
+.venv/
+env/
+.env/
+
+# Python cache / compile files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# macOS system files
+.DS_Store
+Thumbs.db
