@@ -177,6 +177,10 @@ class ScraperJob:
         children = []
         try:
             page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
+            try:
+                page.wait_for_selector("span:has-text('Actions')", timeout=15000)
+            except Exception:
+                pass
             page.wait_for_timeout(2000)
             
             # Find all Actions menu triggers
