@@ -67,28 +67,28 @@ export const ArchiveManager: React.FC<ArchiveManagerProps> = ({ token }) => {
   };
 
   return (
-    <div className="p-6 bg-white rounded-2xl border border-slate-200 space-y-5 shadow-sm font-sans">
+    <div className="p-4 sm:p-6 bg-white rounded-2xl border border-slate-200 space-y-4 sm:space-y-5 shadow-sm font-sans">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="p-2 rounded-xl bg-indigo-50 border border-indigo-100 text-indigo-600">
+          <div className="p-2 rounded-xl bg-indigo-50 border border-indigo-100 text-indigo-600 shrink-0">
             <Archive className="w-5 h-5" />
           </div>
           <div>
-            <h3 className="font-bold text-slate-900 text-base">ZIP Archive Download Center</h3>
+            <h3 className="font-bold text-slate-900 text-sm sm:text-base">ZIP Archive Download Center</h3>
             <p className="text-xs text-slate-500 mt-0.5">Create a downloadable ZIP file of all saved photos and videos</p>
           </div>
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-4 pt-1">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-1">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
           <label className="text-xs font-semibold uppercase tracking-wider text-slate-700">Layout Format:</label>
-          <div className="grid grid-cols-2 p-1 bg-slate-100 border border-slate-200 rounded-xl text-xs font-medium">
+          <div className="grid grid-cols-2 p-1 bg-slate-100 border border-slate-200 rounded-xl text-xs font-medium w-full sm:w-auto">
             <button
               type="button"
               onClick={() => setLayoutMode('flat')}
               disabled={status.status === 'processing'}
-              className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 ${
+              className={`px-3 py-2 sm:py-1.5 rounded-lg transition flex items-center justify-center gap-1.5 ${
                 layoutMode === 'flat'
                   ? 'bg-white text-indigo-700 font-semibold border border-slate-200 shadow-sm'
                   : 'text-slate-500 hover:text-slate-800'
@@ -101,7 +101,7 @@ export const ArchiveManager: React.FC<ArchiveManagerProps> = ({ token }) => {
               type="button"
               onClick={() => setLayoutMode('nested')}
               disabled={status.status === 'processing'}
-              className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 ${
+              className={`px-3 py-2 sm:py-1.5 rounded-lg transition flex items-center justify-center gap-1.5 ${
                 layoutMode === 'nested'
                   ? 'bg-white text-indigo-700 font-semibold border border-slate-200 shadow-sm'
                   : 'text-slate-500 hover:text-slate-800'
@@ -116,7 +116,7 @@ export const ArchiveManager: React.FC<ArchiveManagerProps> = ({ token }) => {
         <button
           onClick={handleCreateArchive}
           disabled={loading || status.status === 'processing'}
-          className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition disabled:opacity-50 flex items-center gap-2 shadow-sm"
+          className="w-full sm:w-auto px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition disabled:opacity-50 flex items-center justify-center gap-2 shadow-sm active:scale-[0.99]"
         >
           {status.status === 'processing' ? (
             <>
@@ -148,31 +148,33 @@ export const ArchiveManager: React.FC<ArchiveManagerProps> = ({ token }) => {
         </div>
       )}
 
-      {/* Archive Ready State */}
-      {status.status === 'ready' && (
-        <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex flex-wrap items-center justify-between gap-4 text-emerald-800 text-xs">
-          <div className="flex items-center gap-3">
+      {/* Download Box */}
+      {status.status === 'ready' && status.archive_id && (
+        <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2.5">
             <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
             <div>
-              <p className="font-bold text-sm text-emerald-900">ZIP Archive Ready ({formatBytes(status.file_size)})</p>
-              <p className="text-emerald-700 text-[11px] mt-0.5">Supports HTTP Range headers for download pause and resume.</p>
+              <p className="font-semibold text-emerald-900">Archive Ready for Download!</p>
+              <p className="text-emerald-700 font-mono text-[11px]">
+                {status.archive_id} • {formatBytes(status.size)}
+              </p>
             </div>
           </div>
+
           <a
             href={`/api/archive/download?token=${token}`}
-            download={status.archive_id}
-            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl transition shadow-sm flex items-center gap-2 text-xs"
+            className="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl transition flex items-center justify-center gap-2 shadow-sm shrink-0"
           >
             <Download className="w-4 h-4" />
-            <span>Download Archive</span>
+            <span>Download ZIP Archive</span>
           </a>
         </div>
       )}
 
-      {status.status === 'error' && (
-        <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl flex items-center gap-3 text-rose-700 text-xs">
-          <AlertCircle className="w-5 h-5 text-rose-500 shrink-0" />
-          <span>Error generating archive: {status.error}</span>
+      {status.status === 'failed' && (
+        <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl flex items-center gap-2.5 text-xs text-rose-700">
+          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+          <span>Archive creation failed: {status.error || 'Unknown error'}</span>
         </div>
       )}
     </div>

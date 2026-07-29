@@ -91,37 +91,37 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, onLogout }) 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans">
       {/* Top Navbar */}
-      <header className="bg-white border-b border-slate-200 px-6 py-3.5 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
-            <Camera className="w-5 h-5" />
+      <header className="bg-white border-b border-slate-200 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3 shadow-sm sticky top-0 z-40">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 shrink-0">
+            <Camera className="w-4 h-4 sm:w-5 sm:h-5" />
           </div>
-          <div>
-            <h1 className="font-bold text-sm text-slate-900 flex items-center gap-2">
-              <span>Bright Horizons Extractor</span>
-              <span className="text-[10px] font-medium px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-full">
-                Portal Sync
+          <div className="min-w-0">
+            <h1 className="font-bold text-xs sm:text-sm text-slate-900 flex items-center gap-1.5 truncate">
+              <span className="truncate">Bright Horizons</span>
+              <span className="text-[10px] font-medium px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-full shrink-0">
+                Sync
               </span>
             </h1>
-            <p className="text-[11px] text-slate-500 flex items-center gap-1 font-mono">
-              <Shield className="w-3 h-3 text-indigo-500" />
-              <span>{email}</span>
+            <p className="text-[10px] sm:text-[11px] text-slate-500 flex items-center gap-1 font-mono truncate">
+              <Shield className="w-3 h-3 text-indigo-500 shrink-0" />
+              <span className="truncate max-w-[160px] sm:max-w-none">{email}</span>
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 ml-auto">
           <button
             onClick={() => setShowDeleteModal(true)}
-            className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-medium rounded-xl transition flex items-center gap-1.5"
+            className="px-2.5 sm:px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-medium rounded-xl transition flex items-center gap-1"
             title="Delete Account & All Data"
           >
             <Trash2 className="w-3.5 h-3.5" />
-            <span>Delete Account</span>
+            <span className="hidden sm:inline">Delete Account</span>
           </button>
           <button
             onClick={onLogout}
-            className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium rounded-xl transition border border-slate-200 flex items-center gap-2"
+            className="px-2.5 sm:px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium rounded-xl transition border border-slate-200 flex items-center gap-1.5"
           >
             <LogOut className="w-3.5 h-3.5" />
             <span>Sign Out</span>
@@ -130,24 +130,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, onLogout }) 
       </header>
 
       {/* Main Dashboard Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6 space-y-4 sm:space-y-6">
         {/* Extraction Control Banner */}
-        <div className="p-6 bg-white rounded-2xl border border-slate-200 space-y-5 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="p-4 sm:p-6 bg-white rounded-2xl border border-slate-200 space-y-4 sm:space-y-5 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-              <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <h2 className="text-sm sm:text-base font-bold text-slate-900 flex items-center gap-2">
                 <Play className="w-4 h-4 text-indigo-600 fill-current" />
                 <span>Extraction Control Panel</span>
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                Configure headless sync options and start downloading your children's photos and videos.
+                Configure sync options and download photos and videos.
               </p>
             </div>
 
             <button
               onClick={handleStartExtraction}
               disabled={status.state === 'running'}
-              className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition disabled:opacity-50 flex items-center gap-2 shadow-sm"
+              className="w-full sm:w-auto px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition disabled:opacity-50 flex items-center justify-center gap-2 shadow-sm active:scale-[0.99]"
             >
               {status.state === 'running' ? (
                 <>
@@ -163,7 +163,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, onLogout }) 
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5 pt-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 pt-1">
             {/* Sync Mode Segment Control */}
             <div className="space-y-1.5">
               <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
@@ -174,7 +174,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, onLogout }) 
                   type="button"
                   onClick={() => setSyncMode('incremental')}
                   disabled={status.state === 'running'}
-                  className={`py-1.5 rounded-lg transition ${
+                  className={`py-2 sm:py-1.5 rounded-lg transition ${
                     syncMode === 'incremental'
                       ? 'bg-white text-indigo-700 font-semibold border border-slate-200 shadow-sm'
                       : 'text-slate-500 hover:text-slate-800'
@@ -186,7 +186,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, onLogout }) 
                   type="button"
                   onClick={() => setSyncMode('full')}
                   disabled={status.state === 'running'}
-                  className={`py-1.5 rounded-lg transition ${
+                  className={`py-2 sm:py-1.5 rounded-lg transition ${
                     syncMode === 'full'
                       ? 'bg-white text-indigo-700 font-semibold border border-slate-200 shadow-sm'
                       : 'text-slate-500 hover:text-slate-800'
@@ -207,7 +207,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, onLogout }) 
                   type="button"
                   onClick={() => setLayoutMode('flat')}
                   disabled={status.state === 'running'}
-                  className={`py-1.5 rounded-lg transition flex items-center justify-center gap-1.5 ${
+                  className={`py-2 sm:py-1.5 rounded-lg transition flex items-center justify-center gap-1.5 ${
                     layoutMode === 'flat'
                       ? 'bg-white text-indigo-700 font-semibold border border-slate-200 shadow-sm'
                       : 'text-slate-500 hover:text-slate-800'
@@ -220,7 +220,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, onLogout }) 
                   type="button"
                   onClick={() => setLayoutMode('nested')}
                   disabled={status.state === 'running'}
-                  className={`py-1.5 rounded-lg transition flex items-center justify-center gap-1.5 ${
+                  className={`py-2 sm:py-1.5 rounded-lg transition flex items-center justify-center gap-1.5 ${
                     layoutMode === 'nested'
                       ? 'bg-white text-indigo-700 font-semibold border border-slate-200 shadow-sm'
                       : 'text-slate-500 hover:text-slate-800'
@@ -233,7 +233,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, onLogout }) 
             </div>
 
             {/* Target Child Selector */}
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 sm:col-span-2 md:col-span-1">
               <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
                 Target Child
               </label>
@@ -241,7 +241,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, onLogout }) 
                 value={targetChild}
                 onChange={(e) => setTargetChild(e.target.value)}
                 disabled={status.state === 'running'}
-                className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2 text-xs text-slate-800 focus:border-indigo-600 outline-none transition"
+                className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 sm:py-2 text-xs text-slate-800 focus:border-indigo-600 outline-none transition"
               >
                 <option value="all">All Enrolled Children</option>
               </select>
@@ -250,17 +250,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, onLogout }) 
 
           {/* Status Alert & Progress Console */}
           {status.state !== 'idle' && (
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
-              <div className="flex items-center justify-between text-xs">
+            <div className="p-3.5 sm:p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                 <div className="flex items-center gap-2">
-                  {status.state === 'running' && <RefreshCw className="w-4 h-4 text-indigo-600 animate-spin" />}
-                  {status.state === 'completed' && <CheckCircle2 className="w-4 h-4 text-emerald-600" />}
-                  {status.state === 'failed' && <AlertTriangle className="w-4 h-4 text-rose-600" />}
+                  {status.state === 'running' && <RefreshCw className="w-4 h-4 text-indigo-600 animate-spin shrink-0" />}
+                  {status.state === 'completed' && <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />}
+                  {status.state === 'failed' && <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />}
                   <span className="font-semibold text-slate-900 capitalize">{status.state}</span>
-                  <span className="text-slate-500 font-mono">• {status.current_step}</span>
+                  <span className="text-slate-500 font-mono text-[11px] truncate max-w-[160px] sm:max-w-none">
+                    • {status.current_step}
+                  </span>
                 </div>
-                <span className="text-xs font-mono text-indigo-700 bg-indigo-50 border border-indigo-100 px-2.5 py-0.5 rounded-full font-semibold">
-                  {status.files_downloaded || 0} files downloaded
+                <span className="text-[11px] font-mono text-indigo-700 bg-indigo-50 border border-indigo-100 px-2.5 py-0.5 rounded-full font-semibold">
+                  {status.files_downloaded || 0} downloaded
                 </span>
               </div>
 
@@ -270,14 +272,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, onLogout }) 
                   onClick={() => setShowLogs(!showLogs)}
                   className="text-[11px] text-slate-500 hover:text-slate-800 flex items-center gap-1.5 mb-2 font-mono"
                 >
-                  <Terminal className="w-3.5 h-3.5 text-indigo-600" />
+                  <Terminal className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
                   <span>{showLogs ? 'Hide Console Logs' : 'Show Console Logs'}</span>
                 </button>
 
                 {showLogs && status.logs && (
-                  <div className="bg-slate-900 rounded-xl p-3.5 max-h-40 overflow-y-auto font-mono text-[11px] text-slate-200 space-y-1">
+                  <div className="bg-slate-900 rounded-xl p-3 sm:p-3.5 max-h-40 overflow-y-auto font-mono text-[11px] text-slate-200 space-y-1">
                     {status.logs.map((log: string, idx: number) => (
-                      <div key={idx} className="leading-relaxed flex items-start gap-2">
+                      <div key={idx} className="leading-relaxed flex items-start gap-2 break-all">
                         <span className="text-slate-500 select-none">&gt;</span>
                         <span>{log}</span>
                       </div>
@@ -299,9 +301,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, onLogout }) 
       {/* Account Deletion Confirmation Modal */}
       {showDeleteModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
-          <div className="max-w-md w-full bg-white border border-slate-200 rounded-2xl p-6 shadow-xl space-y-4">
+          <div className="max-w-md w-full bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-xl space-y-4">
             <div className="flex items-center gap-3 text-rose-600">
-              <div className="p-2 bg-rose-50 rounded-xl border border-rose-100">
+              <div className="p-2 bg-rose-50 rounded-xl border border-rose-100 shrink-0">
                 <AlertCircle className="w-6 h-6" />
               </div>
               <h3 className="font-bold text-slate-900 text-base">Permanently Delete Account?</h3>
@@ -314,12 +316,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, onLogout }) 
               This process is immediate and cannot be undone.
             </p>
 
-            <div className="flex items-center justify-end gap-2 pt-2">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2 pt-2">
               <button
                 type="button"
                 onClick={() => setShowDeleteModal(false)}
                 disabled={deleting}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition border border-slate-200"
+                className="w-full sm:w-auto px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition border border-slate-200"
               >
                 Cancel
               </button>
@@ -327,7 +329,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, onLogout }) 
                 type="button"
                 onClick={handleDeleteAccount}
                 disabled={deleting}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-xl transition shadow-sm flex items-center gap-2"
+                className="w-full sm:w-auto px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-xl transition shadow-sm flex items-center justify-center gap-2"
               >
                 {deleting ? (
                   <>

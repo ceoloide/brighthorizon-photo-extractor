@@ -43,21 +43,21 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
   };
 
   return (
-    <div className="min-h-screen flex flex-col justify-center items-center p-4 bg-slate-50">
-      <div className="max-w-md w-full bg-white rounded-2xl p-8 border border-slate-200 shadow-sm space-y-6">
+    <div className="min-h-screen flex flex-col justify-center items-center p-4 sm:p-6 bg-slate-50">
+      <div className="max-w-md w-full bg-white rounded-2xl p-5 sm:p-8 border border-slate-200 shadow-sm space-y-6">
         {/* Header */}
         <div className="text-center space-y-2">
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-indigo-50 border border-indigo-100 text-indigo-600 mb-1">
             <Camera className="w-6 h-6" />
           </div>
-          <h1 className="text-xl font-bold text-slate-900">Bright Horizons Extractor</h1>
+          <h1 className="text-lg sm:text-xl font-bold text-slate-900">Bright Horizons Extractor</h1>
           <p className="text-xs text-slate-500">Download and archive your children's photos & videos</p>
         </div>
 
         {error && (
           <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-3 text-rose-700 text-xs">
             <ShieldAlert className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
-            <span>{error}</span>
+            <span className="leading-relaxed">{error}</span>
           </div>
         )}
 
@@ -67,13 +67,13 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
               Bright Horizons Email
             </label>
             <div className="relative">
-              <Mail className="absolute left-3.5 top-3 w-4 h-4 text-slate-400" />
+              <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="parent@example.com"
-                className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-300 rounded-xl focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 outline-none text-slate-900 placeholder-slate-400 text-sm transition"
+                className="w-full pl-10 pr-4 py-3 bg-white border border-slate-300 rounded-xl focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 outline-none text-slate-900 placeholder-slate-400 text-sm transition"
                 required
               />
             </div>
@@ -84,13 +84,13 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
               Password
             </label>
             <div className="relative">
-              <Lock className="absolute left-3.5 top-3 w-4 h-4 text-slate-400" />
+              <Lock className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••••••"
-                className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-300 rounded-xl focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 outline-none text-slate-900 placeholder-slate-400 text-sm transition"
+                className="w-full pl-10 pr-4 py-3 bg-white border border-slate-300 rounded-xl focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 outline-none text-slate-900 placeholder-slate-400 text-sm transition"
                 required
               />
             </div>
@@ -99,12 +99,12 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl transition disabled:opacity-50 flex justify-center items-center gap-2 text-sm shadow-sm"
+            className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl transition disabled:opacity-50 flex justify-center items-center gap-2 text-sm shadow-sm active:scale-[0.99]"
           >
             {loading ? (
               <>
                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                <span>Verifying Account & Children...</span>
+                <span className="text-xs sm:text-sm">Verifying Account & Children...</span>
               </>
             ) : (
               <span>Sign In</span>
