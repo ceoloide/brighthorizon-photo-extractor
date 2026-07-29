@@ -153,68 +153,102 @@ class ScraperJob:
             self.status["error"] = str(e)
             self.log(f"Extraction failed: {e}")
 
+    def detect_page_state(self, page: Page, max_wait_sec: int = 35) -> str:
+        """
+        Polls DOM for up to max_wait_sec to detect true page state under slow network/JS redirect conditions.
+        Returns: 'authenticated', 'auth0_username', 'auth0_password', 'landing_login_btn', or 'unknown'.
+        """
+        start_time = time.time()
+        while time.time() - start_time < max_wait_sec:
+            url_lower = page.url.lower()
+
+            # 1. On Auth0 / SSO domain, check login inputs directly (never authenticated)
+            if "auth0.com" in url_lower or "bhloginsso" in url_lower or "login.brighthorizons" in url_lower:
+                pwd_inp = page.locator("input[name='password']:not(.hide), input[id='password']")
+                if pwd_inp.count() > 0 and pwd_inp.first.is_visible():
+                    return "auth0_password"
+
+                username_inp = page.locator("input[name='username'], input[id='username'], input[type='email']")
+                if username_inp.count() > 0 and username_inp.first.is_visible():
+                    return "auth0_username"
+
+                page.wait_for_timeout(1000)
+                continue
+
+            # 2. Check if authenticated home loaded (Actions buttons on child cards)
+            if page.locator("span:has-text('Actions')").count() > 0:
+                return "authenticated"
+
+            # 3. Check for portal Log In button on landing page (e.g. /okta/login)
+            login_btn = page.locator("button:has-text('Log In'), a:has-text('Log In'), button:has-text('Sign In'), a:has-text('Sign In')")
+            if login_btn.count() > 0 and login_btn.first.is_visible():
+                return "landing_login_btn"
+
+            page.wait_for_timeout(1000)
+
+        return "unknown"
+
     def perform_login(self, page: Page):
-        """Robust headless login handler for Bright Horizons portal & Auth0 SSO."""
+        """Ultra-robust headless login handler for Bright Horizons portal & Auth0 SSO, resilient to slow page loads."""
         self.log("Navigating to familyinfocenter.brighthorizons.com/home...")
         page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
-        page.wait_for_timeout(3000)
+        page.wait_for_timeout(2000)
         
-        # Check if already logged in
-        if page.locator("span:has-text('Actions')").count() > 0 or "home" in page.url.lower():
-            if page.locator("span:has-text('Actions')").count() > 0:
-                self.log("Already authenticated via active browser session!")
-                return
+        state = self.detect_page_state(page, max_wait_sec=35)
+        self.log(f"Detected page state: '{state}' (URL: {page.url})")
+        
+        if state == "authenticated":
+            self.log("Already authenticated via active browser session!")
+            return
 
-        # Check for Log In button on okta landing page
-        btn = page.locator("button:has-text('Log In'), a:has-text('Log In'), button:has-text('Sign In')").first
-        if btn.count() > 0 and btn.is_visible():
+        if state == "landing_login_btn":
             self.log("Clicking portal Log In button...")
+            btn = page.locator("button:has-text('Log In'), a:has-text('Log In'), button:has-text('Sign In'), a:has-text('Sign In')").first
             btn.click()
             page.wait_for_load_state("domcontentloaded")
-            page.wait_for_timeout(3000)
+            state = self.detect_page_state(page, max_wait_sec=35)
+            self.log(f"Post-click page state: '{state}' (URL: {page.url})")
 
-        # On Auth0 / SSO form
-        if "username" in page.content().lower() or "bhloginsso" in page.url.lower():
+        if state in ["auth0_username", "auth0_password"]:
             self.log("Auth0 SSO form detected. Filling email...")
             
             # Dismiss alert banner if present
-            close_btn = page.locator("button:has-text('×'), button[aria-label='Close']").first
+            close_btn = page.locator("button.close-banner, button:has-text('×'), button[aria-label='Close']").first
             if close_btn.count() > 0 and close_btn.is_visible():
                 try: close_btn.click()
                 except Exception: pass
                 
-            username_inp = page.locator("input[name='username'], input[id='username']").first
-            username_inp.wait_for(state="visible", timeout=15000)
-            username_inp.click()
-            username_inp.press_sequentially(self.email, delay=20)
-            
-            cont_btn = page.locator("button[type='submit']:not(.ulp-hidden-form-submit-button), button._button-login-id").first
-            if cont_btn.count() > 0 and cont_btn.is_visible():
-                cont_btn.click(force=True)
-            else:
-                page.keyboard.press("Enter")
+            if state == "auth0_username":
+                username_inp = page.locator("input[name='username'], input[id='username'], input[type='email']").first
+                username_inp.wait_for(state="visible", timeout=25000)
+                username_inp.click()
+                username_inp.press_sequentially(self.email, delay=25)
                 
-            page.wait_for_timeout(3000)
-            
-            pwd_inp = page.locator("input[name='password']:not(.hide), input[id='password']").first
-            if pwd_inp.count() > 0:
-                pwd_inp.wait_for(state="visible", timeout=10000)
-                self.log("Filling password...")
-                pwd_inp.click()
-                pwd_inp.press_sequentially(self.password, delay=20)
-                
-                login_btn = page.locator("button[type='submit']:not(.ulp-hidden-form-submit-button), button._button-login-id").first
-                if login_btn.count() > 0 and login_btn.is_visible():
-                    login_btn.click(force=True)
+                cont_btn = page.locator("button[type='submit']:not(.ulp-hidden-form-submit-button), button._button-login-id").first
+                if cont_btn.count() > 0 and cont_btn.is_visible():
+                    cont_btn.click(force=True)
                 else:
-                    page.keyboard.press("Enter")
+                    username_inp.press("Enter")
                     
+                page.wait_for_timeout(2000)
+                
+            pwd_inp = page.locator("input[name='password']:not(.hide), input[id='password']").first
+            pwd_inp.wait_for(state="visible", timeout=25000)
+            self.log("Filling password...")
+            pwd_inp.click()
+            pwd_inp.press_sequentially(self.password, delay=25)
+            
+            login_btn = page.locator("button[type='submit']:not(.ulp-hidden-form-submit-button), button._button-login-id").first
+            if login_btn.count() > 0 and login_btn.is_visible():
+                login_btn.click(force=True)
+            else:
+                pwd_inp.press("Enter")
+                
             self.log("Waiting for post-login redirection to portal...")
             try:
-                page.wait_for_url(re.compile(r'familyinfocenter|mybrightday|parents\.html|home', re.IGNORECASE), timeout=25000)
+                page.wait_for_selector("span:has-text('Actions')", timeout=35000)
             except Exception:
                 pass
-            page.wait_for_load_state("networkidle", timeout=15000)
             page.wait_for_timeout(2000)
             
             # Check for error elements on SSO form
@@ -227,7 +261,7 @@ class ScraperJob:
 
     def verify_credentials(self, progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None) -> List[Dict[str, str]]:
         """
-        Standalone pre-verification helper with progress callbacks and live Playwright screenshot capture.
+        Standalone pre-verification helper with progress callbacks and live Playwright screenshot capture every 5s.
         Validates credentials with Auth0 and auto-discovers children.
         Raises Exception if credentials are invalid or no children found.
         """
@@ -236,7 +270,7 @@ class ScraperJob:
         def update_progress(step: str, step_index: int, page: Optional[Page] = None, force_shot: bool = False):
             now = time.time()
             shot = None
-            if page and (force_shot or (now - self._last_screenshot_time >= 15.0)):
+            if page and (force_shot or (now - self._last_screenshot_time >= 5.0)):
                 try:
                     shot = capture_b64_screenshot(page)
                     self._last_screenshot_time = now
@@ -256,7 +290,7 @@ class ScraperJob:
             while time.time() - start < duration_sec:
                 time.sleep(1.0)
                 now = time.time()
-                if page and (now - self._last_screenshot_time >= 15.0):
+                if page and (now - self._last_screenshot_time >= 5.0):
                     update_progress(step, step_index, page=page, force_shot=True)
 
         self.log("Starting credentials pre-verification check...")
@@ -290,8 +324,13 @@ class ScraperJob:
                         "secure": c.get("secure", False)
                     })
                 context.add_cookies(formatted_cookies)
-                
+            
             page: Page = context.new_page()
+            try:
+                from playwright_stealth import Stealth
+                Stealth().apply_stealth_sync(page)
+            except Exception as e:
+                self.log(f"Stealth application notice: {e}")
             
             try:
                 update_progress("Navigating to Bright Horizons Auth0 portal...", 2, page=page, force_shot=True)
