@@ -55,7 +55,64 @@ def get_current_tenant(authorization: Optional[str] = Header(None)) -> TenantSto
         
     return TenantStorage(email)
 
+_active_verifications: Dict[str, Dict[str, Any]] = {}
+
 # --- Authentication Endpoints ---
+@app.post("/api/auth/verify-progress")
+def verify_progress(req: LoginRequest):
+    email = req.email.strip().lower()
+    if not email or not req.password:
+        raise HTTPException(status_code=400, detail="Email and password are required")
+        
+    tenant_storage = TenantStorage(email)
+    tenant_id = tenant_storage.tenant_id
+    
+    # Check existing verification state
+    current_state = _active_verifications.get(tenant_id)
+    
+    if not current_state or current_state.get("status") in ["failed", "completed_reset"]:
+        # Start new async verification thread
+        state = {
+            "status": "running",
+            "step": "Starting headless browser & Cloudflare challenge check...",
+            "step_index": 1,
+            "screenshot": None,
+            "children": [],
+            "error": None
+        }
+        _active_verifications[tenant_id] = state
+        
+        def run_verification():
+            job = ScraperJob(tenant_storage, req.password, {})
+            def on_progress(p):
+                state["step"] = p.get("step", "")
+                state["step_index"] = p.get("step_index", 1)
+                if p.get("screenshot"):
+                    state["screenshot"] = p.get("screenshot")
+                    
+            try:
+                children = job.verify_credentials(progress_callback=on_progress)
+                config = tenant_storage.load_config()
+                config["email"] = email
+                config["password"] = req.password
+                config["children"] = children
+                tenant_storage.save_config(config)
+                
+                token = create_jwt_token(email, tenant_id)
+                state["status"] = "success"
+                state["token"] = token
+                state["children"] = children
+                state["step"] = "Verification complete!"
+            except Exception as e:
+                state["status"] = "failed"
+                state["error"] = str(e)
+                
+        t = threading.Thread(target=run_verification, daemon=True)
+        t.start()
+        return JSONResponse(content=state)
+        
+    return JSONResponse(content=current_state)
+
 @app.post("/api/auth/login")
 def login(req: LoginRequest):
     email = req.email.strip().lower()

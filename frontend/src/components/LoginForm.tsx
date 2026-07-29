@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Lock, Mail, ShieldAlert, Heart, Camera } from 'lucide-react';
+import { VerificationInterstitial } from './VerificationInterstitial';
 
 interface LoginFormProps {
   onLoginSuccess: (token: string, user: any) => void;
@@ -8,42 +9,36 @@ interface LoginFormProps {
 export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [verifying, setVerifying] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !password) {
       setError('Please enter both email and password.');
       return;
     }
-    setLoading(true);
     setError(null);
-
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || 'Login failed. Please check your credentials.');
-      }
-
-      localStorage.setItem('bh_token', data.token);
-      localStorage.setItem('bh_email', data.email);
-      onLoginSuccess(data.token, data);
-    } catch (err: any) {
-      setError(err.message || 'An unexpected authentication error occurred.');
-    } finally {
-      setLoading(false);
-    }
+    setVerifying(true);
   };
 
+  if (verifying) {
+    return (
+      <VerificationInterstitial
+        email={email}
+        password={password}
+        onSuccess={(token, data) => {
+          onLoginSuccess(token, data);
+        }}
+        onCancel={() => {
+          setVerifying(false);
+        }}
+      />
+    );
+  }
+
   return (
-    <div className="min-h-screen flex flex-col justify-center items-center p-4 sm:p-6 bg-slate-50">
+    <div className="min-h-screen flex flex-col justify-center items-center p-4 sm:p-6 bg-slate-50 font-sans">
       <div className="max-w-md w-full bg-white rounded-2xl p-5 sm:p-8 border border-slate-200 shadow-sm space-y-6">
         {/* Header */}
         <div className="text-center space-y-2">
@@ -98,17 +93,9 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
 
           <button
             type="submit"
-            disabled={loading}
-            className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl transition disabled:opacity-50 flex justify-center items-center gap-2 text-sm shadow-sm active:scale-[0.99]"
+            className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl transition flex justify-center items-center gap-2 text-sm shadow-sm active:scale-[0.99]"
           >
-            {loading ? (
-              <>
-                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                <span className="text-xs sm:text-sm">Verifying Account & Children...</span>
-              </>
-            ) : (
-              <span>Sign In</span>
-            )}
+            <span>Sign In & Verify Account</span>
           </button>
         </form>
 

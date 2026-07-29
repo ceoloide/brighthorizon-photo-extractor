@@ -16,6 +16,15 @@ from backend.database import TenantStorage
 
 FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://192.168.1.176:8191/v1")
 
+def capture_b64_screenshot(page: Page) -> Optional[str]:
+    """Captures a lightweight base64 JPEG screenshot from Playwright for live visual debug preview."""
+    try:
+        img_bytes = page.screenshot(type="jpeg", quality=60)
+        import base64
+        return f"data:image/jpeg;base64,{base64.b64encode(img_bytes).decode('utf-8')}"
+    except Exception:
+        return None
+
 class ScraperJob:
     def __init__(self, tenant_storage: TenantStorage, password: str, options: Dict[str, Any], log_callback: Optional[Callable[[str], None]] = None):
         self.tenant_storage = tenant_storage
@@ -214,20 +223,27 @@ class ScraperJob:
                 err_text = error_el.inner_text().strip()
                 raise Exception(f"Authentication failed: {err_text}")
                 
-            if "bhloginsso" in page.url.lower():
-                raise Exception("Authentication failed: Invalid credentials or security challenge triggered.")
-            
-        self.log(f"Authenticated state verified! Current URL: {page.url}")
+            self.log(f"Authenticated state verified! Current URL: {page.url}")
 
-    def verify_credentials(self) -> List[Dict[str, str]]:
+    def verify_credentials(self, progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None) -> List[Dict[str, str]]:
         """
-        Standalone pre-verification helper: launches headless Playwright session,
-        validates credentials with Auth0, and auto-discovers children.
+        Standalone pre-verification helper with progress callbacks and live Playwright screenshot capture.
+        Validates credentials with Auth0 and auto-discovers children.
         Raises Exception if credentials are invalid or no children found.
         """
+        def update_progress(step: str, step_index: int, screenshot: Optional[str] = None):
+            if progress_callback:
+                progress_callback({
+                    "step": step,
+                    "step_index": step_index,
+                    "screenshot": screenshot,
+                    "url": getattr(self, "_current_url", "https://familyinfocenter.brighthorizons.com/home")
+                })
+
         self.log("Starting credentials pre-verification check...")
-        user_data_dir = self.tenant_storage.user_data_dir
+        update_progress("Bypassing Cloudflare turnstile protection via FlareSolverr...", 1, None)
         
+        user_data_dir = self.tenant_storage.user_data_dir
         clearance_cookies = self.solve_cloudflare_flaresolverr("https://familyinfocenter.brighthorizons.com/home")
         
         with sync_playwright() as p:
@@ -258,19 +274,39 @@ class ScraperJob:
                 
             page: Page = context.new_page()
             
-            # Step 1: Perform login
-            self.perform_login(page)
-            
-            # Step 2: Auto-discover children
-            children = self.discover_children(page, context)
-            if not children:
-                config = self.tenant_storage.load_config()
-                children = config.get("children", [])
+            try:
+                update_progress("Navigating to Bright Horizons Auth0 portal...", 2, capture_b64_screenshot(page))
                 
-            if not children:
-                raise Exception("Authentication succeeded, but no active child profiles were discovered for this account.")
+                # Step 1: Perform login
+                self.log("Navigating to portal and authenticating credentials...")
+                self._current_url = "https://familyinfocenter.brighthorizons.com/home"
                 
-            return children
+                page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
+                page.wait_for_timeout(2000)
+                update_progress("Authenticating with Bright Horizons SSO...", 2, capture_b64_screenshot(page))
+                
+                self.perform_login(page)
+                self._current_url = page.url
+                update_progress("Authentication verified! Discovering enrolled children...", 3, capture_b64_screenshot(page))
+                
+                # Step 2: Auto-discover children
+                children = self.discover_children(page, context)
+                if not children:
+                    config = self.tenant_storage.load_config()
+                    children = config.get("children", [])
+                    
+                if not children:
+                    final_shot = capture_b64_screenshot(page)
+                    update_progress("Verification failed: No child profiles found.", 3, final_shot)
+                    raise Exception("Authentication succeeded, but no active child profiles were discovered for this account.")
+                    
+                update_progress("Verification complete!", 4, capture_b64_screenshot(page))
+                return children
+
+            except Exception as e:
+                final_shot = capture_b64_screenshot(page)
+                update_progress(f"Verification error: {e}", 3, final_shot)
+                raise e
 
     def discover_children(self, page: Page, context: BrowserContext) -> List[Dict[str, str]]:
         """Discovers active children and their dependent_ids following Angular CDK rules in .agents/AGENTS.md."""
