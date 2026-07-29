@@ -1,0 +1,122 @@
+# SPDX-License-Identifier: MIT
+# Tenant Database & Storage Manager for Bright Horizons Photo Extractor
+import json
+import os
+import uuid
+from typing import Dict, Any, List, Optional, Tuple
+from backend.security import get_tenant_id, encrypt_json, decrypt_json, DATA_DIR
+
+class TenantStorage:
+    def __init__(self, email: str):
+        self.email = email.strip().lower()
+        self.tenant_id = get_tenant_id(self.email)
+        self.tenant_dir = os.path.join(DATA_DIR, "tenants", self.tenant_id)
+        self.media_dir = os.path.join(self.tenant_dir, "media")
+        self.archives_dir = os.path.join(self.tenant_dir, "archives")
+        self.user_data_dir = os.path.join(self.tenant_dir, "user_data")
+        
+        self.config_file = os.path.join(self.tenant_dir, "config.enc")
+        self.manifest_file = os.path.join(self.tenant_dir, "manifest.enc")
+        
+        self._ensure_dirs()
+        
+    def _ensure_dirs(self):
+        os.makedirs(self.tenant_dir, exist_ok=True)
+        os.makedirs(self.media_dir, exist_ok=True)
+        os.makedirs(self.archives_dir, exist_ok=True)
+        os.makedirs(self.user_data_dir, exist_ok=True)
+
+    # --- Config Management ---
+    def load_config(self) -> Dict[str, Any]:
+        """Loads tenant configuration (encrypted at rest)."""
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, "r") as f:
+                    return decrypt_json(f.read())
+            except Exception as e:
+                print(f"Error loading tenant config for {self.tenant_id}: {e}")
+        return {
+            "email": self.email,
+            "children": [],
+            "last_sync": None,
+            "sync_status": "idle"
+        }
+
+    def save_config(self, config_data: Dict[str, Any]):
+        """Saves tenant configuration encrypted at rest."""
+        encrypted_str = encrypt_json(config_data)
+        with open(self.config_file, "w") as f:
+            f.write(encrypted_str)
+
+    # --- Manifest & Media Management ---
+    def load_manifest(self) -> Dict[str, Any]:
+        """Loads the tenant's encrypted media manifest."""
+        if os.path.exists(self.manifest_file):
+            try:
+                with open(self.manifest_file, "r") as f:
+                    return decrypt_json(f.read())
+            except Exception as e:
+                print(f"Error loading manifest for {self.tenant_id}: {e}")
+        return {}
+
+    def save_manifest(self, manifest: Dict[str, Any]):
+        """Saves tenant media manifest encrypted at rest."""
+        encrypted_str = encrypt_json(manifest)
+        with open(self.manifest_file, "w") as f:
+            f.write(encrypted_str)
+
+    def add_media_entry(self, obj_id: str, child: str, date_str: str, original_filename: str, comment: str, file_bytes: bytes, mime_type: str) -> Dict[str, Any]:
+        """Saves media file to obfuscated storage path and updates encrypted manifest."""
+        manifest = self.load_manifest()
+        
+        # Check if obj_id already exists in manifest
+        for m_id, item in manifest.items():
+            if item.get("obj_id") == obj_id:
+                # Update existing file content/metadata
+                target_path = os.path.join(self.tenant_dir, item["storage_path"])
+                with open(target_path, "wb") as f:
+                    f.write(file_bytes)
+                item["file_size"] = len(file_bytes)
+                item["comment"] = comment
+                self.save_manifest(manifest)
+                return item
+
+        # New entry
+        media_id = str(uuid.uuid4())
+        rel_storage_path = os.path.join("media", f"{media_id}.dat")
+        abs_storage_path = os.path.join(self.tenant_dir, rel_storage_path)
+        
+        with open(abs_storage_path, "wb") as f:
+            f.write(file_bytes)
+            
+        entry = {
+            "media_id": media_id,
+            "obj_id": obj_id,
+            "child": child,
+            "date": date_str,
+            "year": int(date_str.split("-")[0]) if "-" in date_str else None,
+            "month": int(date_str.split("-")[1]) if "-" in date_str and len(date_str.split("-")) > 1 else None,
+            "original_filename": original_filename,
+            "comment": comment,
+            "mime_type": mime_type,
+            "file_size": len(file_bytes),
+            "storage_path": rel_storage_path
+        }
+        
+        manifest[media_id] = entry
+        self.save_manifest(manifest)
+        return entry
+
+    def get_media_file_path(self, media_id: str) -> Optional[Tuple[str, str, str]]:
+        """
+        Returns (abs_file_path, mime_type, original_filename) if media_id belongs to tenant.
+        Returns None if not found or unauthorized.
+        """
+        manifest = self.load_manifest()
+        item = manifest.get(media_id)
+        if not item:
+            return None
+        abs_path = os.path.join(self.tenant_dir, item["storage_path"])
+        if not os.path.exists(abs_path):
+            return None
+        return abs_path, item.get("mime_type", "image/jpeg"), item.get("original_filename", "photo.jpg")
