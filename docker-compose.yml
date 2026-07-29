@@ -1,0 +1,24 @@
+services:
+  bh-extractor:
+    build: .
+    container_name: bh-extractor
+    restart: unless-stopped
+    ports:
+      - "8095:8095"
+    environment:
+      - DATA_DIR=/data
+      - FLARESOLVERR_URL=http://flaresolverr:8191/v1
+    volumes:
+      - /opt/data/bh-extractor:/data
+    depends_on:
+      - flaresolverr
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    restart: unless-stopped
+    ports:
+      - "8191:8191"
+    environment:
+      - LOG_LEVEL=info
+      - TIMEZONE=America/New_York
