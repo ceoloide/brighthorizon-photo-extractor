@@ -45,14 +45,18 @@ export const App: React.FC = () => {
 
   if (checking) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center text-slate-400">
-        <div className="w-8 h-8 border-2 border-sky-400 border-t-transparent rounded-full animate-spin" />
+      <div className="min-h-screen bg-[#0b0f17] flex flex-col items-center justify-center text-slate-400 gap-3">
+        <div className="relative flex items-center justify-center">
+          <div className="w-10 h-10 border-2 border-cyan-500/30 border-t-cyan-400 rounded-full animate-spin" />
+          <div className="absolute inset-0 w-10 h-10 border-2 border-cyan-400/10 rounded-full blur-sm" />
+        </div>
+        <span className="text-xs font-mono text-slate-500 tracking-wider">SECURE SESSION CHECK</span>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-900">
+    <div className="min-h-screen bg-[#0b0f17] text-slate-100 selection:bg-cyan-500/30 selection:text-cyan-200">
       {token && email ? (
         <Dashboard token={token} email={email} onLogout={handleLogout} />
       ) : (

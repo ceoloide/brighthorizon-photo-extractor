@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Play, RefreshCw, LogOut, CheckCircle, AlertTriangle, Terminal, Layers, RefreshCcw } from 'lucide-react';
+import { Play, RefreshCw, LogOut, CheckCircle2, AlertTriangle, Terminal, Camera, ShieldCheck, Zap, FolderTree, FileSpreadsheet } from 'lucide-react';
 import { Gallery } from './Gallery';
 import { ArchiveManager } from './ArchiveManager';
 
@@ -70,52 +70,62 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, onLogout }) 
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col">
+    <div className="min-h-screen bg-[#0b0f17] text-slate-100 flex flex-col font-sans">
       {/* Top Navbar */}
-      <header className="bg-slate-800 border-b border-slate-700 px-6 py-4 flex items-center justify-between shadow-lg">
+      <header className="sticky top-0 z-40 bg-[#101726]/80 backdrop-blur-xl border-b border-slate-800/80 px-6 py-3.5 flex items-center justify-between shadow-xl">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-xl bg-sky-500/20 border border-sky-400 flex items-center justify-center font-bold text-sky-400">
-            BH
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-cyan-500 to-blue-600 p-0.5 shadow-md shadow-cyan-500/20">
+            <div className="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center text-cyan-400">
+              <Camera className="w-4 h-4" />
+            </div>
           </div>
           <div>
-            <h1 className="font-bold text-base text-slate-100">Bright Horizons Photo Extractor</h1>
-            <p className="text-xs text-slate-400 font-mono">{email}</p>
+            <h1 className="font-bold text-sm text-slate-100 tracking-tight flex items-center gap-2">
+              <span>Bright Horizons Extractor</span>
+              <span className="text-[10px] uppercase font-mono px-2 py-0.5 bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 rounded-full">
+                Headless
+              </span>
+            </h1>
+            <p className="text-[11px] text-slate-400 font-mono flex items-center gap-1">
+              <ShieldCheck className="w-3 h-3 text-cyan-400" />
+              <span>{email}</span>
+            </p>
           </div>
         </div>
 
         <button
           onClick={onLogout}
-          className="px-3.5 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold rounded-xl transition flex items-center gap-2"
+          className="px-3.5 py-1.5 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/60 text-slate-300 hover:text-slate-100 text-xs font-semibold rounded-xl transition flex items-center gap-2"
         >
-          <LogOut className="w-4 h-4" />
+          <LogOut className="w-3.5 h-3.5" />
           <span>Sign Out</span>
         </button>
       </header>
 
       {/* Main Dashboard Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-8">
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-8">
         {/* Extraction Control Banner */}
-        <div className="p-6 bg-slate-800 rounded-2xl border border-slate-700 space-y-5 shadow-xl">
+        <div className="p-6 glass-panel rounded-3xl border border-slate-800/80 space-y-6 shadow-2xl relative overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
-                <Play className="w-5 h-5 text-sky-400" />
+                <Zap className="w-5 h-5 text-cyan-400" />
                 <span>Extraction Control Panel</span>
               </h2>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Configure headless sync mode and parameters for Bright Horizons parent portal.
+              <p className="text-xs text-slate-400 mt-1">
+                Configure headless sync options and kick off extraction job.
               </p>
             </div>
 
             <button
               onClick={handleStartExtraction}
               disabled={status.state === 'running'}
-              className="px-5 py-2.5 bg-sky-600 hover:bg-sky-500 text-white font-semibold rounded-xl transition disabled:opacity-50 flex items-center gap-2 shadow-lg shadow-sky-600/20"
+              className="px-6 py-2.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-semibold rounded-xl transition-all duration-200 disabled:opacity-50 flex items-center gap-2 shadow-lg shadow-cyan-500/25 text-sm"
             >
               {status.state === 'running' ? (
                 <>
                   <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>Extracting...</span>
+                  <span>Extracting Feed...</span>
                 </>
               ) : (
                 <>
@@ -126,83 +136,123 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, onLogout }) 
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
-            <div>
-              <label className="block text-xs font-semibold text-slate-400 uppercase mb-1.5">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-2">
+            {/* Sync Mode Segment Control */}
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">
                 Sync Mode
               </label>
-              <select
-                value={syncMode}
-                onChange={(e: any) => setSyncMode(e.target.value)}
-                disabled={status.state === 'running'}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 focus:ring-2 focus:ring-sky-500 outline-none"
-              >
-                <option value="incremental">Incremental (Stop on existing)</option>
-                <option value="full">Full Verification (Check all dates)</option>
-              </select>
+              <div className="grid grid-cols-2 p-1 bg-slate-900/90 border border-slate-800 rounded-xl text-xs font-medium">
+                <button
+                  type="button"
+                  onClick={() => setSyncMode('incremental')}
+                  disabled={status.state === 'running'}
+                  className={`py-2 rounded-lg transition-all ${
+                    syncMode === 'incremental'
+                      ? 'bg-gradient-to-r from-cyan-500/20 to-blue-600/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Incremental
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSyncMode('full')}
+                  disabled={status.state === 'running'}
+                  className={`py-2 rounded-lg transition-all ${
+                    syncMode === 'full'
+                      ? 'bg-gradient-to-r from-cyan-500/20 to-blue-600/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Full Rescan
+                </button>
+              </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-400 uppercase mb-1.5">
+            {/* Storage Layout Segment Control */}
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">
                 Storage Layout
               </label>
-              <select
-                value={layoutMode}
-                onChange={(e: any) => setLayoutMode(e.target.value)}
-                disabled={status.state === 'running'}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 focus:ring-2 focus:ring-sky-500 outline-none"
-              >
-                <option value="flat">Flat (ChildName/filename)</option>
-                <option value="nested">Nested (ChildName/YYYY/MM/filename)</option>
-              </select>
+              <div className="grid grid-cols-2 p-1 bg-slate-900/90 border border-slate-800 rounded-xl text-xs font-medium">
+                <button
+                  type="button"
+                  onClick={() => setLayoutMode('flat')}
+                  disabled={status.state === 'running'}
+                  className={`py-2 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                    layoutMode === 'flat'
+                      ? 'bg-gradient-to-r from-cyan-500/20 to-blue-600/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  <span>Flat</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLayoutMode('nested')}
+                  disabled={status.state === 'running'}
+                  className={`py-2 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                    layoutMode === 'nested'
+                      ? 'bg-gradient-to-r from-cyan-500/20 to-blue-600/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <FolderTree className="w-3.5 h-3.5" />
+                  <span>Nested</span>
+                </button>
+              </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-400 uppercase mb-1.5">
+            {/* Target Child Selector */}
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">
                 Target Child
               </label>
               <select
                 value={targetChild}
                 onChange={(e) => setTargetChild(e.target.value)}
                 disabled={status.state === 'running'}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 focus:ring-2 focus:ring-sky-500 outline-none"
+                className="w-full bg-slate-900/90 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:ring-2 focus:ring-cyan-500/50 outline-none transition-all"
               >
                 <option value="all">All Enrolled Children</option>
               </select>
             </div>
           </div>
 
-          {/* Status Alert & Progress */}
+          {/* Status Alert & Progress Console */}
           {status.state !== 'idle' && (
-            <div className="mt-4 p-4 bg-slate-900/90 border border-slate-700 rounded-xl space-y-3">
-              <div className="flex items-center justify-between text-sm">
+            <div className="p-4 bg-slate-900/90 border border-slate-800 rounded-2xl space-y-3">
+              <div className="flex items-center justify-between text-xs">
                 <div className="flex items-center gap-2">
-                  {status.state === 'running' && <RefreshCw className="w-4 h-4 text-sky-400 animate-spin" />}
-                  {status.state === 'completed' && <CheckCircle className="w-4 h-4 text-emerald-400" />}
+                  {status.state === 'running' && <RefreshCw className="w-4 h-4 text-cyan-400 animate-spin" />}
+                  {status.state === 'completed' && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
                   {status.state === 'failed' && <AlertTriangle className="w-4 h-4 text-rose-400" />}
                   <span className="font-semibold text-slate-200 capitalize">{status.state}</span>
-                  <span className="text-slate-400">• {status.current_step}</span>
+                  <span className="text-slate-400 font-mono">• {status.current_step}</span>
                 </div>
-                <span className="text-xs font-mono text-slate-400">
+                <span className="text-xs font-mono text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded-full border border-cyan-500/20">
                   {status.files_downloaded || 0} files downloaded
                 </span>
               </div>
 
               {/* Console Log Drawer */}
-              <div className="pt-2">
+              <div className="pt-1">
                 <button
                   onClick={() => setShowLogs(!showLogs)}
-                  className="text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1 mb-2 font-mono"
+                  className="text-[11px] text-slate-400 hover:text-cyan-300 flex items-center gap-1.5 mb-2 font-mono transition-colors"
                 >
-                  <Terminal className="w-3.5 h-3.5" />
-                  <span>{showLogs ? 'Hide Live Logs' : 'Show Live Logs'}</span>
+                  <Terminal className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>{showLogs ? 'Hide Log Output' : 'Show Log Output'}</span>
                 </button>
 
                 {showLogs && status.logs && (
-                  <div className="bg-black/80 rounded-xl p-3 max-h-40 overflow-y-auto font-mono text-[11px] text-slate-300 space-y-1">
+                  <div className="bg-[#05080e] rounded-xl p-3.5 max-h-44 overflow-y-auto font-mono text-[11px] text-slate-300 space-y-1 border border-slate-800/80">
                     {status.logs.map((log: string, idx: number) => (
-                      <div key={idx} className="leading-relaxed">
-                        {log}
+                      <div key={idx} className="leading-relaxed flex items-start gap-2">
+                        <span className="text-slate-600 select-none">&gt;</span>
+                        <span>{log}</span>
                       </div>
                     ))}
                   </div>
