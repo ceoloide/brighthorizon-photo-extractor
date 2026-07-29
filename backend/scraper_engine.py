@@ -295,7 +295,7 @@ class ScraperJob:
             
             try:
                 update_progress("Navigating to Bright Horizons Auth0 portal...", 2, page=page, force_shot=True)
-                smart_wait(page, 5, "Navigating to Bright Horizons Auth0 portal...", 2)
+                smart_wait(page, 15, "Navigating to Bright Horizons Auth0 portal...", 2)
                 
                 # Step 1: Perform login
                 self.log("Navigating to portal and authenticating credentials...")
@@ -304,12 +304,12 @@ class ScraperJob:
                 page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
                 page.wait_for_timeout(2000)
                 update_progress("Authenticating with Bright Horizons SSO...", 2, page=page, force_shot=True)
-                smart_wait(page, 5, "Authenticating with Bright Horizons SSO...", 2)
+                smart_wait(page, 15, "Authenticating with Bright Horizons SSO...", 2)
                 
                 self.perform_login(page)
                 self._current_url = page.url
                 update_progress("Authentication verified! Discovering enrolled children...", 3, page=page, force_shot=True)
-                smart_wait(page, 5, "Authentication verified! Discovering enrolled children...", 3)
+                smart_wait(page, 15, "Authentication verified! Discovering enrolled children...", 3)
                 
                 # Step 2: Auto-discover children
                 children = self.discover_children(page, context)
@@ -322,7 +322,7 @@ class ScraperJob:
                     raise Exception("Authentication succeeded, but no active child profiles were discovered for this account.")
                     
                 update_progress("Verification complete!", 4, page=page, force_shot=True)
-                smart_wait(page, 5, "Verification complete!", 4)
+                smart_wait(page, 15, "Verification complete!", 4)
                 return children
 
             except Exception as e:
