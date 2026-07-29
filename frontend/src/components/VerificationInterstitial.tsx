@@ -105,12 +105,6 @@ export const VerificationInterstitial: React.FC<VerificationInterstitialProps> =
               <Monitor className="w-4 h-4 text-indigo-600" />
               <span>Live Headless Browser Debug View</span>
             </span>
-            {status.status === 'running' && (
-              <span className="flex items-center gap-1 text-[11px] text-rose-600 font-mono">
-                <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
-                LIVE SCREENSHOT
-              </span>
-            )}
           </div>
 
           <div className="bg-slate-950 rounded-xl border border-slate-800 p-2 overflow-hidden flex flex-col items-center justify-center min-h-[220px] max-h-[340px] relative group">
@@ -126,11 +120,6 @@ export const VerificationInterstitial: React.FC<VerificationInterstitialProps> =
                 <span className="text-xs font-mono text-slate-400">Capturing live browser viewport...</span>
               </div>
             )}
-          </div>
-
-          <div className="p-3 bg-slate-900 rounded-xl font-mono text-[11px] text-slate-300 flex items-center justify-between">
-            <span className="truncate flex-1 pr-2">&gt; {status.step}</span>
-            {status.status === 'running' && <RefreshCw className="w-3.5 h-3.5 text-indigo-400 animate-spin shrink-0" />}
           </div>
         </div>
 
