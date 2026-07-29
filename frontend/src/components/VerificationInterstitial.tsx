@@ -103,7 +103,7 @@ export const VerificationInterstitial: React.FC<VerificationInterstitialProps> =
           <div className="flex items-center justify-between text-xs text-slate-700 font-medium">
             <span className="flex items-center gap-1.5 font-semibold text-slate-900">
               <Monitor className="w-4 h-4 text-indigo-600" />
-              <span>Live Headless Browser Debug View</span>
+              <span>Live Preview</span>
             </span>
           </div>
 
