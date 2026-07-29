@@ -63,9 +63,19 @@ def login(req: LoginRequest):
         raise HTTPException(status_code=400, detail="Email and password are required")
         
     tenant_storage = TenantStorage(email)
+    
+    # Pre-verify credentials and auto-discover children via headless Playwright
+    job = ScraperJob(tenant_storage, req.password, {})
+    try:
+        children = job.verify_credentials()
+    except Exception as e:
+        # Do NOT save invalid credentials
+        raise HTTPException(status_code=401, detail=str(e))
+        
     config = tenant_storage.load_config()
     config["email"] = email
-    config["password"] = req.password # Note: config encrypted at rest via AES-256-GCM
+    config["password"] = req.password # Encrypted at rest via AES-256-GCM
+    config["children"] = children
     tenant_storage.save_config(config)
     
     token = create_jwt_token(email, tenant_storage.tenant_id)
@@ -74,7 +84,7 @@ def login(req: LoginRequest):
         "token": token,
         "email": email,
         "tenant_id": tenant_storage.tenant_id,
-        "children": config.get("children", [])
+        "children": children
     }
 
 @app.get("/api/auth/me")
@@ -86,6 +96,26 @@ def me(tenant: TenantStorage = Depends(get_current_tenant)):
         "children": config.get("children", []),
         "last_sync": config.get("last_sync")
     }
+
+@app.delete("/api/auth/delete-account")
+def delete_account(tenant: TenantStorage = Depends(get_current_tenant)):
+    tenant_id = tenant.tenant_id
+    
+    # Terminate active job if running
+    if tenant_id in _active_jobs:
+        job = _active_jobs.pop(tenant_id, None)
+        if job:
+            job.status["state"] = "failed"
+            job.status["error"] = "Account deleted"
+            
+    # Purge all media, user_data, encrypted manifests, and archives from disk
+    tenant.purge_all_data()
+    
+    return {
+        "status": "success",
+        "message": "Account and all associated media, manifests, and browser sessions have been permanently deleted."
+    }
+
 
 # --- Extraction Management ---
 @app.post("/api/extraction/start")

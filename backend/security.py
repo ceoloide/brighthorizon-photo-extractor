@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 
-DATA_DIR = os.environ.get("DATA_DIR", "/data")
+DATA_DIR = os.environ.get("DATA_DIR", "/data" if (os.path.exists("/data") and os.access("/data", os.W_OK)) else os.path.join(os.getcwd(), "data"))
 SALT_FILE = os.path.join(DATA_DIR, "salt.bin")
 MASTER_SECRET_FILE = os.path.join(DATA_DIR, "master_secret.bin")
 

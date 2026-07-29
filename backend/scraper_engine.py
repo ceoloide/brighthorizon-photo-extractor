@@ -202,13 +202,75 @@ class ScraperJob:
                     
             self.log("Waiting for post-login redirection to portal...")
             try:
-                page.wait_for_url(re.compile(r'familyinfocenter|mybrightday|parents\.html|home', re.IGNORECASE), timeout=30000)
+                page.wait_for_url(re.compile(r'familyinfocenter|mybrightday|parents\.html|home', re.IGNORECASE), timeout=25000)
             except Exception:
                 pass
-            page.wait_for_load_state("networkidle", timeout=30000)
-            page.wait_for_timeout(3000)
+            page.wait_for_load_state("networkidle", timeout=15000)
+            page.wait_for_timeout(2000)
+            
+            # Check for error elements on SSO form
+            error_el = page.locator("span.ulp-input-error-message, div.alert-danger, span#error-element-password").first
+            if error_el.count() > 0 and error_el.is_visible():
+                err_text = error_el.inner_text().strip()
+                raise Exception(f"Authentication failed: {err_text}")
+                
+            if "bhloginsso" in page.url.lower():
+                raise Exception("Authentication failed: Invalid credentials or security challenge triggered.")
             
         self.log(f"Authenticated state verified! Current URL: {page.url}")
+
+    def verify_credentials(self) -> List[Dict[str, str]]:
+        """
+        Standalone pre-verification helper: launches headless Playwright session,
+        validates credentials with Auth0, and auto-discovers children.
+        Raises Exception if credentials are invalid or no children found.
+        """
+        self.log("Starting credentials pre-verification check...")
+        user_data_dir = self.tenant_storage.user_data_dir
+        
+        clearance_cookies = self.solve_cloudflare_flaresolverr("https://familyinfocenter.brighthorizons.com/home")
+        
+        with sync_playwright() as p:
+            args = [
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-dev-shm-usage"
+            ]
+            context: BrowserContext = p.chromium.launch_persistent_context(
+                user_data_dir,
+                headless=True,
+                args=args,
+                ignore_default_args=["--enable-automation"],
+                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+            )
+            
+            if clearance_cookies:
+                formatted_cookies = []
+                for c in clearance_cookies:
+                    formatted_cookies.append({
+                        "name": c["name"],
+                        "value": c["value"],
+                        "domain": c["domain"],
+                        "path": c.get("path", "/"),
+                        "secure": c.get("secure", False)
+                    })
+                context.add_cookies(formatted_cookies)
+                
+            page: Page = context.new_page()
+            
+            # Step 1: Perform login
+            self.perform_login(page)
+            
+            # Step 2: Auto-discover children
+            children = self.discover_children(page, context)
+            if not children:
+                config = self.tenant_storage.load_config()
+                children = config.get("children", [])
+                
+            if not children:
+                raise Exception("Authentication succeeded, but no active child profiles were discovered for this account.")
+                
+            return children
 
     def discover_children(self, page: Page, context: BrowserContext) -> List[Dict[str, str]]:
         """Discovers active children and their dependent_ids following Angular CDK rules in .agents/AGENTS.md."""

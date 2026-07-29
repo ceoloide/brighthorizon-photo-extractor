@@ -71,3 +71,20 @@ def test_range_header_parsing():
     # Invalid bounds
     bounds = parse_range_header("bytes=15000-20000", file_size)
     assert bounds is None
+
+def test_tenant_purge_data():
+    storage = TenantStorage("purge_test_user@example.com")
+    config = storage.load_config()
+    config["test"] = "data"
+    storage.save_config(config)
+    assert os.path.exists(storage.tenant_dir)
+    
+    storage.purge_all_data()
+    assert not os.path.exists(storage.tenant_dir)
+
+def test_path_traversal_prevention():
+    storage = TenantStorage("security_check_user@example.com")
+    file_info = storage.get_media_file_path("../../../etc/passwd")
+    assert file_info is None
+    storage.purge_all_data()
+

@@ -45,15 +45,15 @@ export const App: React.FC = () => {
 
   if (checking) {
     return (
-      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-slate-400 gap-3">
-        <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-        <span className="text-xs font-mono text-slate-500">Checking session...</span>
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center text-slate-500 gap-3">
+        <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+        <span className="text-xs font-medium text-slate-600">Loading session...</span>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 font-sans">
+    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
       {token && email ? (
         <Dashboard token={token} email={email} onLogout={handleLogout} />
       ) : (
