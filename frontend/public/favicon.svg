@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="photo-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#EEF2FF" />
+      <stop offset="100%" stop-color="#E0E7FF" />
+    </linearGradient>
+    <linearGradient id="heart-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FB7185" />
+      <stop offset="100%" stop-color="#E11D48" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#0F172A" flood-opacity="0.12" />
+    </filter>
+  </defs>
+
+  <!-- Outer Polaroid Frame -->
+  <g filter="url(#shadow)">
+    <rect x="64" y="48" width="384" height="416" rx="24" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="10" />
+  </g>
+
+  <!-- Photo Display Window -->
+  <rect x="96" y="80" width="320" height="272" rx="14" fill="url(#photo-bg)" stroke="#A5B4FC" stroke-width="4" />
+
+  <!-- Heart inside Polaroid -->
+  <path d="M256 310 C200 260 140 215 140 165 C140 120 175 90 215 90 C238 90 250 102 256 112 C262 102 274 90 297 90 C337 90 372 120 372 165 C372 215 312 260 256 310 Z" fill="url(#heart-grad)" />
+</svg>
