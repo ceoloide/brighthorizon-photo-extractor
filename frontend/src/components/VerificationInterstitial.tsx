@@ -66,11 +66,6 @@ export const VerificationInterstitial: React.FC<VerificationInterstitialProps> =
               <p className="text-xs text-slate-500 font-mono truncate max-w-[240px] sm:max-w-none">{email}</p>
             </div>
           </div>
-
-          <div className="flex items-center gap-1.5 px-3 py-1 bg-indigo-50 border border-indigo-100 rounded-full text-indigo-700 text-xs font-medium shrink-0 self-start sm:self-auto">
-            <Shield className="w-3.5 h-3.5 text-indigo-600" />
-            <span>FlareSolverr Cloudflare Bypass Active</span>
-          </div>
         </div>
 
         {/* Step-by-Step Progress Tracker */}
