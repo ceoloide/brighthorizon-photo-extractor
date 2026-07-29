@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, CheckCircle2, RefreshCw, AlertTriangle, ArrowLeft, Camera, Monitor, Lock } from 'lucide-react';
+import { CheckCircle2, RefreshCw, AlertTriangle, ArrowLeft, Camera, Monitor } from 'lucide-react';
 
 interface VerificationInterstitialProps {
   email: string;
@@ -7,6 +7,25 @@ interface VerificationInterstitialProps {
   onSuccess: (token: string, user: any) => void;
   onCancel: () => void;
 }
+
+const formatRelativeTime = (timestampMs: number | null): string => {
+  if (!timestampMs) return 'Waiting for update...';
+  const diffSec = Math.max(0, Math.floor((Date.now() - timestampMs) / 1000));
+  if (diffSec < 3) return 'Just now';
+  if (diffSec < 60) return `${diffSec} seconds ago`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin === 1) return 'A minute ago';
+  if (diffMin < 60) {
+    const numberWords: { [k: number]: string } = {
+      2: 'Two', 3: 'Three', 4: 'Four', 5: 'Five', 6: 'Six', 7: 'Seven', 8: 'Eight', 9: 'Nine', 10: 'Ten'
+    };
+    const minStr = numberWords[diffMin] || `${diffMin}`;
+    return `${minStr} minutes ago`;
+  }
+  const diffHours = Math.floor(diffMin / 60);
+  if (diffHours === 1) return 'An hour ago';
+  return `${diffHours} hours ago`;
+};
 
 export const VerificationInterstitial: React.FC<VerificationInterstitialProps> = ({ email, password, onSuccess, onCancel }) => {
   const [status, setStatus] = useState<any>({
@@ -16,35 +35,60 @@ export const VerificationInterstitial: React.FC<VerificationInterstitialProps> =
     screenshot: null,
     error: null
   });
+  const [lastSseTime, setLastSseTime] = useState<number | null>(null);
+  const [, setNowTick] = useState<number>(Date.now());
 
-  const pollProgress = async () => {
-    try {
-      const res = await fetch('/api/auth/verify-progress', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setStatus(data);
-        if (data.status === 'success' && data.token) {
-          localStorage.setItem('bh_token', data.token);
-          localStorage.setItem('bh_email', email);
-          setTimeout(() => {
-            onSuccess(data.token, data);
-          }, 1200);
-        }
-      }
-    } catch (err: any) {
-      console.error('Error polling verification progress:', err);
-    }
-  };
-
+  // 1-second ticker to smoothly increment smart relative timestamp
   useEffect(() => {
-    pollProgress();
-    const interval = setInterval(pollProgress, 1200);
-    return () => clearInterval(interval);
+    const timer = setInterval(() => {
+      setNowTick(Date.now());
+    }, 1000);
+    return () => clearInterval(timer);
   }, []);
+
+  // Connect to SSE event stream
+  useEffect(() => {
+    let isMounted = true;
+    let eventSource: EventSource | null = null;
+
+    const connectSSE = () => {
+      const url = `/api/auth/verify-stream?email=${encodeURIComponent(email)}&password=${encodeURIComponent(password)}`;
+      eventSource = new EventSource(url);
+
+      eventSource.onmessage = (event) => {
+        if (!isMounted) return;
+        try {
+          const data = JSON.parse(event.data);
+          setStatus(data);
+          setLastSseTime(Date.now());
+          if (data.status === 'success' && data.token) {
+            localStorage.setItem('bh_token', data.token);
+            localStorage.setItem('bh_email', email);
+            setTimeout(() => {
+              if (isMounted) onSuccess(data.token, data);
+            }, 1200);
+          }
+        } catch (e) {
+          console.error('Error parsing SSE payload:', e);
+        }
+      };
+
+      eventSource.onerror = () => {
+        if (eventSource) {
+          eventSource.close();
+        }
+      };
+    };
+
+    connectSSE();
+
+    return () => {
+      isMounted = false;
+      if (eventSource) {
+        eventSource.close();
+      }
+    };
+  }, [email, password]);
 
   const steps = [
     { title: 'Bypass Cloudflare Turnstile', desc: 'FlareSolverr clearance cookies' },
@@ -121,6 +165,10 @@ export const VerificationInterstitial: React.FC<VerificationInterstitialProps> =
               </div>
             )}
           </div>
+
+          <p className="text-[11px] text-slate-400 font-normal text-center mt-1.5">
+            Last update received: {formatRelativeTime(lastSseTime)}
+          </p>
         </div>
 
         {/* Status Outcome Banners */}

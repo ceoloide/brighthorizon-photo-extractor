@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: MIT
 # FastAPI Server for Multi-Tenant Headless Bright Horizons Extractor
 import os
+import time
+import json
+import asyncio
 import threading
 from typing import Dict, Any, Optional
-from fastapi import FastAPI, Depends, HTTPException, Header, Request, status
+from fastapi import FastAPI, Depends, HTTPException, Header, Request, status, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -57,7 +60,98 @@ def get_current_tenant(authorization: Optional[str] = Header(None)) -> TenantSto
 
 _active_verifications: Dict[str, Dict[str, Any]] = {}
 
+def _start_verification_thread(email: str, password: str, tenant_storage: TenantStorage) -> Dict[str, Any]:
+    tenant_id = tenant_storage.tenant_id
+    state = {
+        "status": "running",
+        "step": "Starting headless browser & Cloudflare challenge check...",
+        "step_index": 1,
+        "screenshot": None,
+        "children": [],
+        "error": None,
+        "timestamp": time.time()
+    }
+    _active_verifications[tenant_id] = state
+    
+    def run_verification():
+        job = ScraperJob(tenant_storage, password, {})
+        def on_progress(p):
+            state["step"] = p.get("step", "")
+            state["step_index"] = p.get("step_index", 1)
+            state["timestamp"] = time.time()
+            if p.get("screenshot"):
+                state["screenshot"] = p.get("screenshot")
+                
+        try:
+            children = job.verify_credentials(progress_callback=on_progress)
+            config = tenant_storage.load_config()
+            config["email"] = email
+            config["password"] = password
+            config["children"] = children
+            tenant_storage.save_config(config)
+            
+            token = create_jwt_token(email, tenant_id)
+            state["status"] = "success"
+            state["token"] = token
+            state["children"] = children
+            state["step"] = "Verification complete!"
+            state["timestamp"] = time.time()
+        except Exception as e:
+            state["status"] = "failed"
+            state["error"] = str(e)
+            state["timestamp"] = time.time()
+        finally:
+            def schedule_cleanup():
+                time.sleep(45)
+                if tenant_id in _active_verifications:
+                    _active_verifications[tenant_id]["screenshot"] = None
+            threading.Thread(target=schedule_cleanup, daemon=True).start()
+            
+    t = threading.Thread(target=run_verification, daemon=True)
+    t.start()
+    return state
+
 # --- Authentication Endpoints ---
+@app.get("/api/auth/verify-stream")
+async def verify_stream(email: str = Query(...), password: str = Query(...)):
+    email_clean = email.strip().lower()
+    if not email_clean or not password:
+        raise HTTPException(status_code=400, detail="Email and password are required")
+        
+    tenant_storage = TenantStorage(email_clean)
+    tenant_id = tenant_storage.tenant_id
+    
+    current_state = _active_verifications.get(tenant_id)
+    if not current_state or current_state.get("status") in ["failed", "completed_reset"]:
+        current_state = _start_verification_thread(email_clean, password, tenant_storage)
+
+    async def event_generator():
+        while True:
+            state = _active_verifications.get(tenant_id)
+            if not state:
+                break
+            
+            payload = json.dumps(state)
+            yield f"data: {payload}\n\n"
+            
+            if state.get("status") in ["success", "failed"]:
+                # Yield final state once and break
+                await asyncio.sleep(0.5)
+                yield f"data: {json.dumps(state)}\n\n"
+                break
+                
+            await asyncio.sleep(1.0)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
 @app.post("/api/auth/verify-progress")
 def verify_progress(req: LoginRequest):
     email = req.email.strip().lower()
@@ -67,57 +161,10 @@ def verify_progress(req: LoginRequest):
     tenant_storage = TenantStorage(email)
     tenant_id = tenant_storage.tenant_id
     
-    # Check existing verification state
     current_state = _active_verifications.get(tenant_id)
-    
     if not current_state or current_state.get("status") in ["failed", "completed_reset"]:
-        # Start new async verification thread
-        state = {
-            "status": "running",
-            "step": "Starting headless browser & Cloudflare challenge check...",
-            "step_index": 1,
-            "screenshot": None,
-            "children": [],
-            "error": None
-        }
-        _active_verifications[tenant_id] = state
-        
-        def run_verification():
-            job = ScraperJob(tenant_storage, req.password, {})
-            def on_progress(p):
-                state["step"] = p.get("step", "")
-                state["step_index"] = p.get("step_index", 1)
-                if p.get("screenshot"):
-                    state["screenshot"] = p.get("screenshot")
-                    
-            try:
-                children = job.verify_credentials(progress_callback=on_progress)
-                config = tenant_storage.load_config()
-                config["email"] = email
-                config["password"] = req.password
-                config["children"] = children
-                tenant_storage.save_config(config)
-                
-                token = create_jwt_token(email, tenant_id)
-                state["status"] = "success"
-                state["token"] = token
-                state["children"] = children
-                state["step"] = "Verification complete!"
-            except Exception as e:
-                state["status"] = "failed"
-                state["error"] = str(e)
-            finally:
-                # Schedule screenshot memory cleanup after 45 seconds to avoid holding images in RAM
-                def schedule_cleanup():
-                    import time
-                    time.sleep(45)
-                    if tenant_id in _active_verifications:
-                        _active_verifications[tenant_id]["screenshot"] = None
-                threading.Thread(target=schedule_cleanup, daemon=True).start()
-                
-        t = threading.Thread(target=run_verification, daemon=True)
-        t.start()
-        return JSONResponse(content=state)
+        current_state = _start_verification_thread(email, req.password, tenant_storage)
+        return JSONResponse(content=current_state)
         
     return JSONResponse(content=current_state)
 
