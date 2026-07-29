@@ -231,17 +231,36 @@ class ScraperJob:
         Validates credentials with Auth0 and auto-discovers children.
         Raises Exception if credentials are invalid or no children found.
         """
-        def update_progress(step: str, step_index: int, screenshot: Optional[str] = None):
+        self._last_screenshot_time = 0.0
+
+        def update_progress(step: str, step_index: int, page: Optional[Page] = None, force_shot: bool = False):
+            now = time.time()
+            shot = None
+            if page and (force_shot or (now - self._last_screenshot_time >= 15.0)):
+                try:
+                    shot = capture_b64_screenshot(page)
+                    self._last_screenshot_time = now
+                except Exception:
+                    pass
+
             if progress_callback:
                 progress_callback({
                     "step": step,
                     "step_index": step_index,
-                    "screenshot": screenshot,
+                    "screenshot": shot,
                     "url": getattr(self, "_current_url", "https://familyinfocenter.brighthorizons.com/home")
                 })
 
+        def smart_wait(page: Optional[Page], duration_sec: float, step: str, step_index: int):
+            start = time.time()
+            while time.time() - start < duration_sec:
+                time.sleep(1.0)
+                now = time.time()
+                if page and (now - self._last_screenshot_time >= 15.0):
+                    update_progress(step, step_index, page=page, force_shot=True)
+
         self.log("Starting credentials pre-verification check...")
-        update_progress("Bypassing Cloudflare turnstile protection via FlareSolverr...", 1, None)
+        update_progress("Bypassing Cloudflare turnstile protection via FlareSolverr...", 1, None, force_shot=False)
         
         user_data_dir = self.tenant_storage.user_data_dir
         clearance_cookies = self.solve_cloudflare_flaresolverr("https://familyinfocenter.brighthorizons.com/home")
@@ -275,8 +294,8 @@ class ScraperJob:
             page: Page = context.new_page()
             
             try:
-                update_progress("Navigating to Bright Horizons Auth0 portal...", 2, capture_b64_screenshot(page))
-                time.sleep(5)
+                update_progress("Navigating to Bright Horizons Auth0 portal...", 2, page=page, force_shot=True)
+                smart_wait(page, 5, "Navigating to Bright Horizons Auth0 portal...", 2)
                 
                 # Step 1: Perform login
                 self.log("Navigating to portal and authenticating credentials...")
@@ -284,13 +303,13 @@ class ScraperJob:
                 
                 page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
                 page.wait_for_timeout(2000)
-                update_progress("Authenticating with Bright Horizons SSO...", 2, capture_b64_screenshot(page))
-                time.sleep(5)
+                update_progress("Authenticating with Bright Horizons SSO...", 2, page=page, force_shot=True)
+                smart_wait(page, 5, "Authenticating with Bright Horizons SSO...", 2)
                 
                 self.perform_login(page)
                 self._current_url = page.url
-                update_progress("Authentication verified! Discovering enrolled children...", 3, capture_b64_screenshot(page))
-                time.sleep(5)
+                update_progress("Authentication verified! Discovering enrolled children...", 3, page=page, force_shot=True)
+                smart_wait(page, 5, "Authentication verified! Discovering enrolled children...", 3)
                 
                 # Step 2: Auto-discover children
                 children = self.discover_children(page, context)
@@ -299,17 +318,15 @@ class ScraperJob:
                     children = config.get("children", [])
                     
                 if not children:
-                    final_shot = capture_b64_screenshot(page)
-                    update_progress("Verification failed: No child profiles found.", 3, final_shot)
+                    update_progress("Verification failed: No child profiles found.", 3, page=page, force_shot=True)
                     raise Exception("Authentication succeeded, but no active child profiles were discovered for this account.")
                     
-                update_progress("Verification complete!", 4, capture_b64_screenshot(page))
-                time.sleep(5)
+                update_progress("Verification complete!", 4, page=page, force_shot=True)
+                smart_wait(page, 5, "Verification complete!", 4)
                 return children
 
             except Exception as e:
-                final_shot = capture_b64_screenshot(page)
-                update_progress(f"Verification error: {e}", 3, final_shot)
+                update_progress(f"Verification error: {e}", 3, page=page, force_shot=True)
                 raise e
 
     def discover_children(self, page: Page, context: BrowserContext) -> List[Dict[str, str]]:
