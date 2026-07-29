@@ -106,6 +106,14 @@ def verify_progress(req: LoginRequest):
             except Exception as e:
                 state["status"] = "failed"
                 state["error"] = str(e)
+            finally:
+                # Schedule screenshot memory cleanup after 45 seconds to avoid holding images in RAM
+                def schedule_cleanup():
+                    import time
+                    time.sleep(45)
+                    if tenant_id in _active_verifications:
+                        _active_verifications[tenant_id]["screenshot"] = None
+                threading.Thread(target=schedule_cleanup, daemon=True).start()
                 
         t = threading.Thread(target=run_verification, daemon=True)
         t.start()

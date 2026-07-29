@@ -88,3 +88,21 @@ def test_path_traversal_prevention():
     assert file_info is None
     storage.purge_all_data()
 
+def test_concurrent_verification_isolation():
+    from backend.server import _active_verifications
+    from backend.security import get_tenant_id
+    
+    tid1 = get_tenant_id("userA@example.com")
+    tid2 = get_tenant_id("userB@example.com")
+    
+    _active_verifications[tid1] = {"status": "running", "screenshot": "data:image/jpeg;base64,UserAScreenshotData"}
+    _active_verifications[tid2] = {"status": "running", "screenshot": "data:image/jpeg;base64,UserBScreenshotData"}
+    
+    assert _active_verifications[tid1]["screenshot"] != _active_verifications[tid2]["screenshot"]
+    assert "UserAScreenshotData" in _active_verifications[tid1]["screenshot"]
+    assert "UserBScreenshotData" in _active_verifications[tid2]["screenshot"]
+    
+    _active_verifications.pop(tid1, None)
+    _active_verifications.pop(tid2, None)
+
+
