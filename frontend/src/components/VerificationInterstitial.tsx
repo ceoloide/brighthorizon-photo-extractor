@@ -117,7 +117,7 @@ export const VerificationInterstitial: React.FC<VerificationInterstitialProps> =
             ) : (
               <div className="flex flex-col items-center justify-center py-12 text-slate-500 gap-2">
                 <RefreshCw className="w-6 h-6 text-indigo-500 animate-spin" />
-                <span className="text-xs font-mono text-slate-400">Capturing live browser viewport...</span>
+                <span className="text-xs font-mono text-slate-400">Capturing live preview...</span>
               </div>
             )}
           </div>
