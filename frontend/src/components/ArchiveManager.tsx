@@ -67,10 +67,10 @@ export const ArchiveManager: React.FC<ArchiveManagerProps> = ({ token }) => {
   };
 
   return (
-    <div className="p-6 glass-panel rounded-3xl border border-slate-800/80 space-y-5 font-sans">
+    <div className="p-6 bg-slate-800 rounded-xl border border-slate-700 space-y-5 shadow-sm font-sans">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="p-2 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400">
+          <div className="p-2 rounded-lg bg-blue-600/10 border border-blue-500/20 text-blue-400">
             <Archive className="w-5 h-5" />
           </div>
           <div>
@@ -80,17 +80,17 @@ export const ArchiveManager: React.FC<ArchiveManagerProps> = ({ token }) => {
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-4 pt-2">
+      <div className="flex flex-wrap items-center justify-between gap-4 pt-1">
         <div className="flex items-center gap-3">
-          <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">Layout Format:</label>
-          <div className="grid grid-cols-2 p-1 bg-slate-900/90 border border-slate-800 rounded-xl text-xs font-medium">
+          <label className="text-xs font-semibold uppercase tracking-wider text-slate-300">Layout Format:</label>
+          <div className="grid grid-cols-2 p-1 bg-slate-900 border border-slate-700 rounded-lg text-xs font-medium">
             <button
               type="button"
               onClick={() => setLayoutMode('flat')}
               disabled={status.status === 'processing'}
-              className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded transition flex items-center gap-1.5 ${
                 layoutMode === 'flat'
-                  ? 'bg-gradient-to-r from-cyan-500/20 to-blue-600/20 text-cyan-300 border border-cyan-500/40 font-semibold'
+                  ? 'bg-slate-700 text-slate-100 font-semibold border border-slate-600'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
@@ -101,9 +101,9 @@ export const ArchiveManager: React.FC<ArchiveManagerProps> = ({ token }) => {
               type="button"
               onClick={() => setLayoutMode('nested')}
               disabled={status.status === 'processing'}
-              className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded transition flex items-center gap-1.5 ${
                 layoutMode === 'nested'
-                  ? 'bg-gradient-to-r from-cyan-500/20 to-blue-600/20 text-cyan-300 border border-cyan-500/40 font-semibold'
+                  ? 'bg-slate-700 text-slate-100 font-semibold border border-slate-600'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
@@ -116,7 +116,7 @@ export const ArchiveManager: React.FC<ArchiveManagerProps> = ({ token }) => {
         <button
           onClick={handleCreateArchive}
           disabled={loading || status.status === 'processing'}
-          className="px-5 py-2.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white text-xs font-semibold rounded-xl transition-all duration-200 disabled:opacity-50 flex items-center gap-2 shadow-lg shadow-cyan-500/20"
+          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg transition disabled:opacity-50 flex items-center gap-2 shadow-sm"
         >
           {status.status === 'processing' ? (
             <>
@@ -136,12 +136,12 @@ export const ArchiveManager: React.FC<ArchiveManagerProps> = ({ token }) => {
       {status.status === 'processing' && (
         <div className="space-y-1.5 pt-2">
           <div className="flex justify-between text-xs text-slate-400">
-            <span>Compressing photos and metadata into ZIP file...</span>
-            <span className="font-mono font-bold text-cyan-400">{status.progress_percent}%</span>
+            <span>Compressing media files into ZIP...</span>
+            <span className="font-mono font-bold text-blue-400">{status.progress_percent}%</span>
           </div>
-          <div className="w-full h-2 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+          <div className="w-full h-2 bg-slate-900 rounded-full overflow-hidden border border-slate-700">
             <div
-              className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 transition-all duration-300 rounded-full shadow-sm shadow-cyan-500/50"
+              className="h-full bg-blue-500 transition-all duration-300 rounded-full"
               style={{ width: `${status.progress_percent}%` }}
             />
           </div>
@@ -150,7 +150,7 @@ export const ArchiveManager: React.FC<ArchiveManagerProps> = ({ token }) => {
 
       {/* Archive Ready State */}
       {status.status === 'ready' && (
-        <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl flex flex-wrap items-center justify-between gap-4 text-emerald-300 text-xs">
+        <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-lg flex flex-wrap items-center justify-between gap-4 text-emerald-300 text-xs">
           <div className="flex items-center gap-3">
             <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
             <div>
@@ -161,7 +161,7 @@ export const ArchiveManager: React.FC<ArchiveManagerProps> = ({ token }) => {
           <a
             href={`/api/archive/download?token=${token}`}
             download={status.archive_id}
-            className="px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-semibold rounded-xl transition-all shadow-md flex items-center gap-2 text-xs"
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg transition shadow-sm flex items-center gap-2 text-xs"
           >
             <Download className="w-4 h-4" />
             <span>Download Archive</span>
@@ -170,7 +170,7 @@ export const ArchiveManager: React.FC<ArchiveManagerProps> = ({ token }) => {
       )}
 
       {status.status === 'error' && (
-        <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl flex items-center gap-3 text-rose-300 text-xs">
+        <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-lg flex items-center gap-3 text-rose-300 text-xs">
           <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
           <span>Error generating archive: {status.error}</span>
         </div>
