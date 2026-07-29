@@ -45,9 +45,9 @@ class ScraperJob:
         self.log_callback(entry)
 
     def solve_cloudflare_flaresolverr(self, target_url: str) -> List[Dict[str, Any]]:
-        """Queries FlareSolverr API to resolve Cloudflare challenges and return session cookies."""
+        """Queries FlareSolverr API to resolve Cloudflare turnstile/bot challenges and return session cookies."""
         try:
-            self.log("Querying FlareSolverr endpoint to bypass Cloudflare protection...")
+            self.log(f"Querying FlareSolverr endpoint ({FLARESOLVERR_URL}) to bypass Cloudflare protection...")
             payload = {
                 "cmd": "request.get",
                 "url": target_url,
@@ -59,10 +59,10 @@ class ScraperJob:
                 if data.get("status") == "ok":
                     solution = data.get("solution", {})
                     cookies = solution.get("cookies", [])
-                    self.log(f"FlareSolverr successfully resolved challenge ({len(cookies)} cookies received).")
+                    self.log(f"FlareSolverr successfully resolved challenge ({len(cookies)} clearance cookies received).")
                     return cookies
         except Exception as e:
-            self.log(f"FlareSolverr request failed (will fall back to native Playwright): {e}")
+            self.log(f"FlareSolverr request failed (will fall back to native Playwright stealth): {e}")
         return []
 
     def run(self):
@@ -73,6 +73,9 @@ class ScraperJob:
         user_data_dir = self.tenant_storage.user_data_dir
         
         try:
+            # Query FlareSolverr for initial clearance cookies
+            clearance_cookies = self.solve_cloudflare_flaresolverr("https://familyinfocenter.brighthorizons.com/home")
+            
             with sync_playwright() as p:
                 args = [
                     "--disable-blink-features=AutomationControlled",
@@ -88,54 +91,23 @@ class ScraperJob:
                     user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
                 )
                 
+                if clearance_cookies:
+                    formatted_cookies = []
+                    for c in clearance_cookies:
+                        formatted_cookies.append({
+                            "name": c["name"],
+                            "value": c["value"],
+                            "domain": c["domain"],
+                            "path": c.get("path", "/"),
+                            "secure": c.get("secure", False)
+                        })
+                    context.add_cookies(formatted_cookies)
+                
                 page: Page = context.new_page()
                 
                 # Step 1: Check login & authenticate
                 self.status["current_step"] = "Authenticating with Bright Horizons"
-                self.log("Navigating to familyinfocenter.brighthorizons.com/home...")
-                page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
-                
-                # Check for Cloudflare Turnstile / 403
-                title = page.title().lower()
-                content = page.content().lower()
-                if "just a moment" in title or "cloudflare" in title or "turnstile" in content:
-                    self.log("Cloudflare Turnstile detected! Engaging FlareSolverr bypass...")
-                    cookies = self.solve_cloudflare_flaresolverr("https://familyinfocenter.brighthorizons.com/home")
-                    if cookies:
-                        formatted_cookies = []
-                        for c in cookies:
-                            formatted_cookies.append({
-                                "name": c["name"],
-                                "value": c["value"],
-                                "domain": c["domain"],
-                                "path": c.get("path", "/"),
-                                "secure": c.get("secure", False)
-                            })
-                        context.add_cookies(formatted_cookies)
-                        page.reload(wait_until="domcontentloaded")
-                
-                # Perform login if needed
-                if "login" in page.url.lower() or page.locator("input[type='email'], input[name='username']").count() > 0:
-                    self.log("Login form detected. Entering credentials...")
-                    email_input = page.locator("input[type='email'], input[name='username']").first
-                    email_input.fill(self.email)
-                    
-                    next_btn = page.locator("button[type='submit'], input[type='submit'], button:has-text('Next')").first
-                    if next_btn.is_visible():
-                        next_btn.click()
-                        page.wait_for_timeout(2000)
-                        
-                    pwd_input = page.locator("input[type='password']").first
-                    pwd_input.wait_for(state="visible", timeout=10000)
-                    pwd_input.fill(self.password)
-                    
-                    login_btn = page.locator("button[type='submit'], input[type='submit'], button:has-text('Sign In')").first
-                    login_btn.click()
-                    
-                    page.wait_for_load_state("domcontentloaded", timeout=30000)
-                    page.wait_for_timeout(3000)
-                
-                self.log(f"Authenticated successfully! Current URL: {page.url}")
+                self.perform_login(page)
                 
                 # Step 2: Auto-discover children following Angular CDK rules (.agents/AGENTS.md)
                 self.status["current_step"] = "Discovering enrolled children"
@@ -171,6 +143,67 @@ class ScraperJob:
             self.status["state"] = "failed"
             self.status["error"] = str(e)
             self.log(f"Extraction failed: {e}")
+
+    def perform_login(self, page: Page):
+        """Robust headless login handler for Bright Horizons portal & Auth0 SSO."""
+        self.log("Navigating to familyinfocenter.brighthorizons.com/home...")
+        page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+        
+        # Check if already logged in
+        if page.locator("span:has-text('Actions')").count() > 0 or "home" in page.url.lower():
+            if page.locator("span:has-text('Actions')").count() > 0:
+                self.log("Already authenticated via active browser session!")
+                return
+
+        # Check for Log In button on okta landing page
+        btn = page.locator("button:has-text('Log In'), a:has-text('Log In'), button:has-text('Sign In')").first
+        if btn.count() > 0 and btn.is_visible():
+            self.log("Clicking portal Log In button...")
+            btn.click()
+            page.wait_for_load_state("domcontentloaded")
+            page.wait_for_timeout(3000)
+
+        # On Auth0 / SSO form
+        if "username" in page.content().lower() or "bhloginsso" in page.url.lower():
+            self.log("Auth0 SSO form detected. Filling email...")
+            
+            # Dismiss alert banner if present
+            close_btn = page.locator("button:has-text('×'), button[aria-label='Close']").first
+            if close_btn.count() > 0 and close_btn.is_visible():
+                try: close_btn.click()
+                except Exception: pass
+                
+            username_inp = page.locator("input[name='username'], input[id='username']").first
+            username_inp.wait_for(state="visible", timeout=15000)
+            username_inp.click()
+            username_inp.press_sequentially(self.email, delay=20)
+            
+            cont_btn = page.locator("button[type='submit']:not(.ulp-hidden-form-submit-button), button._button-login-id").first
+            if cont_btn.count() > 0 and cont_btn.is_visible():
+                cont_btn.click(force=True)
+            else:
+                page.keyboard.press("Enter")
+                
+            page.wait_for_timeout(3000)
+            
+            pwd_inp = page.locator("input[name='password']:not(.hide), input[id='password']").first
+            if pwd_inp.count() > 0:
+                pwd_inp.wait_for(state="visible", timeout=10000)
+                self.log("Filling password...")
+                pwd_inp.click()
+                pwd_inp.press_sequentially(self.password, delay=20)
+                
+                login_btn = page.locator("button[type='submit']:not(.ulp-hidden-form-submit-button), button._button-login-id").first
+                if login_btn.count() > 0 and login_btn.is_visible():
+                    login_btn.click(force=True)
+                else:
+                    page.keyboard.press("Enter")
+                    
+            page.wait_for_load_state("networkidle", timeout=30000)
+            page.wait_for_timeout(3000)
+            
+        self.log(f"Authenticated state verified! Current URL: {page.url}")
 
     def discover_children(self, page: Page, context: BrowserContext) -> List[Dict[str, str]]:
         """Discovers active children and their dependent_ids following Angular CDK rules in .agents/AGENTS.md."""
