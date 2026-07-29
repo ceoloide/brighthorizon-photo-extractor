@@ -200,6 +200,11 @@ class ScraperJob:
                 else:
                     page.keyboard.press("Enter")
                     
+            self.log("Waiting for post-login redirection to portal...")
+            try:
+                page.wait_for_url(re.compile(r'familyinfocenter|mybrightday|parents\.html|home', re.IGNORECASE), timeout=30000)
+            except Exception:
+                pass
             page.wait_for_load_state("networkidle", timeout=30000)
             page.wait_for_timeout(3000)
             
