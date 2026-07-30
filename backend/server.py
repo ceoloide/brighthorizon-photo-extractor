@@ -66,6 +66,16 @@ class ExtractionRequest(BaseModel):
 class ArchiveRequest(BaseModel):
     layout_mode: str = "flat"
 
+def parse_unix_timestamp(ts: Any) -> Optional[float]:
+    """Parses a timestamp that may be in seconds (10 digits) or milliseconds (13 digits)."""
+    try:
+        val = float(ts)
+        if val > 1e11:
+            return val / 1000.0
+        return val
+    except Exception:
+        return None
+
 def get_current_tenant(
     request: Request,
     authorization: Optional[str] = Header(None),
@@ -355,10 +365,11 @@ def import_session(req: ImportSessionRequest, response: Response):
                     if "@@auth0spajs@@" in str(k):
                         try:
                             val_dict = json.loads(v) if isinstance(v, str) else v
-                            expires_at_ms = val_dict.get("expiresAt")
-                            if expires_at_ms and (expires_at_ms / 1000.0) < time.time():
+                            exp_raw = val_dict.get("expiresAt") or val_dict.get("body", {}).get("expires_at")
+                            exp_ts = parse_unix_timestamp(exp_raw)
+                            if exp_ts and exp_ts < time.time():
                                 token_expired = True
-                                expired_at = datetime.fromtimestamp(expires_at_ms / 1000.0).strftime("%I:%M %p")
+                                expired_at = datetime.fromtimestamp(exp_ts).strftime("%I:%M %p")
                                 expired_at_str = f"Token expired at {expired_at}"
                         except Exception:
                             pass
