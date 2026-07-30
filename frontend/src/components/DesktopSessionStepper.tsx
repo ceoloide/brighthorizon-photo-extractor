@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ExternalLink, Copy, Check, ShieldCheck, AlertCircle, Laptop, ArrowRight, Lock, Camera, Mail } from 'lucide-react';
 
 interface DesktopSessionStepperProps {
-  onSuccess: (email: string, children?: any[]) => void;
+  onSuccess: (email: string, children?: any[], token?: string) => void;
 }
 
 export const DesktopSessionStepper: React.FC<DesktopSessionStepperProps> = ({ onSuccess }) => {
@@ -77,7 +77,7 @@ export const DesktopSessionStepper: React.FC<DesktopSessionStepperProps> = ({ on
         throw new Error(resData.detail || 'Failed to import session');
       }
 
-      onSuccess(email.trim(), resData.children || []);
+      onSuccess(email.trim(), resData.children || [], resData.token);
     } catch (err: any) {
       setValidationError(err.message || 'Portal authentication failed. Please log in again in your Bright Horizons tab and paste fresh session tokens.');
       setStep(3);

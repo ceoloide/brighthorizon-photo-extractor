@@ -65,21 +65,35 @@ class ExtractionRequest(BaseModel):
 class ArchiveRequest(BaseModel):
     layout_mode: str = "flat"
 
-def get_current_tenant(authorization: Optional[str] = Header(None)) -> TenantStorage:
-    """Dependency enforcing JWT authentication and multi-tenant scoping."""
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+def get_current_tenant(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    token: Optional[str] = Query(None)
+) -> TenantStorage:
+    """Dependency enforcing JWT authentication via Bearer token, query param, or HTTP cookie."""
+    jwt_str = None
     
-    token = authorization.split(" ")[1]
-    payload = verify_jwt_token(token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired session token")
-    
-    email = payload.get("email")
-    if not email:
-        raise HTTPException(status_code=401, detail="Invalid payload in token")
+    if authorization and authorization.startswith("Bearer "):
+        jwt_str = authorization.split(" ")[1]
         
-    return TenantStorage(email)
+    if not jwt_str and token:
+        jwt_str = token
+        
+    if not jwt_str or jwt_str.startswith("device_session_"):
+        jwt_str = request.cookies.get("bh_tenant_token")
+        
+    if jwt_str:
+        payload = verify_jwt_token(jwt_str)
+        if payload and payload.get("email"):
+            return TenantStorage(payload["email"])
+            
+    cookie_token = request.cookies.get("bh_tenant_token")
+    if cookie_token:
+        payload = verify_jwt_token(cookie_token)
+        if payload and payload.get("email"):
+            return TenantStorage(payload["email"])
+            
+    raise HTTPException(status_code=401, detail="Authentication required or session expired.")
 
 _active_verifications: Dict[str, Dict[str, Any]] = {}
 
@@ -509,19 +523,7 @@ def cancel_extraction(tenant: TenantStorage = Depends(get_current_tenant)):
     return {"status": "idle", "message": "No active job running."}
 
 @app.get("/api/extraction/events")
-def extraction_events(token: Optional[str] = None, authorization: Optional[str] = Header(None)):
-    auth_token = token
-    if not auth_token and authorization and authorization.startswith("Bearer "):
-        auth_token = authorization.split(" ")[1]
-        
-    if not auth_token:
-        raise HTTPException(status_code=401, detail="Authentication token required")
-        
-    payload = verify_jwt_token(auth_token)
-    if not payload or "email" not in payload:
-        raise HTTPException(status_code=401, detail="Invalid token")
-        
-    tenant = TenantStorage(payload["email"])
+def extraction_events(tenant: TenantStorage = Depends(get_current_tenant)):
     tenant_id = tenant.tenant_id
     
     def event_generator():

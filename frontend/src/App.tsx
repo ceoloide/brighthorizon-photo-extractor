@@ -48,11 +48,11 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  const handleSessionSuccess = (userEmail: string, discoveredChildren?: any[]) => {
-    const dummyToken = 'device_session_' + Date.now();
-    localStorage.setItem('bh_token', dummyToken);
+  const handleSessionSuccess = (userEmail: string, discoveredChildren?: any[], validToken?: string) => {
+    const activeToken = validToken || 'device_session_' + Date.now();
+    localStorage.setItem('bh_token', activeToken);
     localStorage.setItem('bh_email', userEmail);
-    setToken(dummyToken);
+    setToken(activeToken);
     setEmail(userEmail);
     if (discoveredChildren) setChildrenList(discoveredChildren);
   };
