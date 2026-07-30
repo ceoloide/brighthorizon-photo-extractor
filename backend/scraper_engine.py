@@ -215,38 +215,33 @@ class ScraperJob:
 
                 # Step 2: Auto-discover enrolled children
                 config = self.tenant_storage.load_config()
-                children = config.get("children", [])
+                all_children = config.get("children", [])
+
+                if not all_children:
+                    self.status["current_step"] = "Discovering enrolled children"
+                    all_children = self.discover_children(page, context)
+                    if all_children:
+                        config["children"] = all_children
+                        self.tenant_storage.save_config(config)
+
+                if not all_children:
+                    raise Exception("No enrolled child profiles discovered for this account.")
 
                 if self.target_child != "all":
-                    matching = [c for c in children if c.get("name", "").lower() == self.target_child.lower()]
+                    target_clean = self.target_child.strip().lower()
+                    matching = [c for c in all_children if c.get("name", "").strip().lower() == target_clean or c.get("name", "").strip().lower().startswith(target_clean)]
                     if matching:
                         children = matching
-                        self.log(f"Target child '{matching[0]['name']}' selected. Processing target child directly without rescanning other profiles.")
+                        self.log(f"Target child '{matching[0]['name']}' selected. Processing single child feed directly.")
                     else:
-                        self.status["current_step"] = f"Discovering profile for target child '{self.target_child.capitalize()}'"
-                        all_discovered = self.discover_children(page, context)
-                        matching = [c for c in all_discovered if c.get("name", "").lower() == self.target_child.lower()]
-                        children = matching if matching else all_discovered
-                        config["children"] = all_discovered
-                        self.tenant_storage.save_config(config)
+                        raise Exception(f"Selected target child '{self.target_child}' was not found among enrolled children.")
                 else:
-                    if not children:
-                        self.status["current_step"] = "Discovering enrolled children"
-                        children = self.discover_children(page, context)
-                        config["children"] = children
-                        self.tenant_storage.save_config(config)
-                    
-                if not children:
-                    raise Exception("No enrolled child profiles discovered for this account.")
+                    children = all_children
 
                 # Step 3: Extract feed for children
                 self.status["current_step"] = "Extracting photos & videos"
                 for child in children:
                     if self._cancelled: break
-                    if self.target_child != "all" and child["name"].lower() != self.target_child.lower():
-                        self.log(f"Skipping '{child['name']}' (Target is '{self.target_child.capitalize()}').")
-                        continue
-                    self.log(f"Starting feed extraction for child: '{child['name']}'...")
                     self.extract_child_feed(page, context, child)
                     
                 if self._cancelled:
@@ -737,11 +732,23 @@ class ScraperJob:
         child_name = child["name"]
         dep_id = child["dependent_id"]
         
-        self.log(f"Processing feed for {child_name}...")
+        self.log(f"Processing feed for {child_name} (Sync Mode: {self.sync_mode.upper()})...")
         url = f"https://mybrightday.brighthorizons.com/dashboard/parents.html?dependent_id={dep_id}"
         page.goto(url, wait_until="domcontentloaded")
         page.wait_for_timeout(3000)
         
+        # Enforce top bar child filter click if rendered
+        try:
+            top_bar_tiles = page.locator("ul.thumbnails li, div.thumbnails div.tile").all()
+            for t_item in top_bar_tiles:
+                if child_name.lower() in t_item.inner_text().lower():
+                    t_item.click()
+                    self.log(f"Enforced child filter click on top bar tile for '{child_name}'.")
+                    page.wait_for_timeout(1500)
+                    break
+        except Exception:
+            pass
+
         # Scrape timeframe links
         timeframe_lis = page.locator("li", has_text=re.compile(r'^[a-z]{3}\s+\d{4}$', re.IGNORECASE)).all()
         self.log(f"Found {len(timeframe_lis)} timeframe month links for {child_name}.")

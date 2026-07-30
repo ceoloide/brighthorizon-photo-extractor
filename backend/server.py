@@ -508,6 +508,45 @@ def cancel_extraction(tenant: TenantStorage = Depends(get_current_tenant)):
         return {"status": "cancelled", "message": "Extraction job cancellation requested."}
     return {"status": "idle", "message": "No active job running."}
 
+@app.get("/api/extraction/events")
+def extraction_events(token: Optional[str] = None, authorization: Optional[str] = Header(None)):
+    auth_token = token
+    if not auth_token and authorization and authorization.startswith("Bearer "):
+        auth_token = authorization.split(" ")[1]
+        
+    if not auth_token:
+        raise HTTPException(status_code=401, detail="Authentication token required")
+        
+    payload = verify_jwt_token(auth_token)
+    if not payload or "email" not in payload:
+        raise HTTPException(status_code=401, detail="Invalid token")
+        
+    tenant = TenantStorage(payload["email"])
+    tenant_id = tenant.tenant_id
+    
+    def event_generator():
+        while True:
+            job = _active_jobs.get(tenant_id)
+            if job:
+                st = job.status
+                payload_str = json.dumps(st)
+                yield f"data: {payload_str}\n\n"
+                if st.get("state") in ["completed", "failed", "cancelled"]:
+                    break
+            else:
+                payload_str = json.dumps({
+                    "state": "idle",
+                    "current_step": "No extraction active",
+                    "files_downloaded": 0,
+                    "error": None,
+                    "logs": []
+                })
+                yield f"data: {payload_str}\n\n"
+                break
+            time.sleep(1.0)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
 @app.get("/api/extraction/status")
 def extraction_status(tenant: TenantStorage = Depends(get_current_tenant)):
     tenant_id = tenant.tenant_id

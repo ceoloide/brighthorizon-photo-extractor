@@ -21,6 +21,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
   const [showConflictModal, setShowConflictModal] = useState<boolean>(false);
   const [deleting, setDeleting] = useState<boolean>(false);
   const [cancelling, setCancelling] = useState<boolean>(false);
+  const [starting, setStarting] = useState<boolean>(false);
 
   const fetchStatus = async () => {
     try {
@@ -46,16 +47,38 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
     fetchStatus();
   }, [token]);
 
+  // Connect to real-time SSE extraction events stream while running
   useEffect(() => {
-    let interval: any;
+    let sse: EventSource | null = null;
     if (status.state === 'running') {
-      interval = setInterval(fetchStatus, 1500);
+      const url = `/api/extraction/events?token=${encodeURIComponent(token)}`;
+      sse = new EventSource(url);
+      sse.onmessage = (e) => {
+        if (e.data) {
+          try {
+            const data = JSON.parse(e.data);
+            setStatus(data);
+            if (data.state === 'completed') {
+              setRefreshTrigger((prev) => prev + 1);
+              setCancelling(false);
+            } else if (data.state === 'failed' || data.state === 'cancelled') {
+              setCancelling(false);
+            }
+          } catch {}
+        }
+      };
+      sse.onerror = () => {
+        sse?.close();
+      };
     }
-    return () => clearInterval(interval);
-  }, [status.state]);
+    return () => {
+      sse?.close();
+    };
+  }, [status.state, token]);
 
   const handleStartExtraction = async (force: boolean = false) => {
     setShowConflictModal(false);
+    setStarting(true);
     try {
       const res = await fetch('/api/extraction/start', {
         method: 'POST',
@@ -80,6 +103,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
       }
     } catch (err) {
       console.error('Failed to start extraction:', err);
+    } finally {
+      setStarting(false);
     }
   };
 
@@ -112,6 +137,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
       setDeleting(false);
     }
   };
+
+  const isInputDisabled = status.state === 'running' || starting || cancelling;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans">
@@ -188,10 +215,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
               ) : (
                 <button
                   onClick={() => handleStartExtraction(false)}
-                  className="w-full sm:w-auto px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition flex items-center justify-center gap-2 shadow-sm active:scale-[0.99]"
+                  disabled={starting}
+                  className="w-full sm:w-auto px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-semibold rounded-xl transition flex items-center justify-center gap-2 shadow-sm active:scale-[0.99]"
                 >
-                  <Play className="w-4 h-4 fill-current" />
-                  <span>Start Extraction</span>
+                  {starting ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Starting Job...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-4 h-4 fill-current" />
+                      <span>Start Extraction</span>
+                    </>
+                  )}
                 </button>
               )}
             </div>
@@ -227,6 +264,30 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
             </div>
           )}
 
+          {/* Completed / Failed / Cancelled State Banners */}
+          {status.state === 'completed' && (
+            <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl p-3.5 flex items-center justify-between text-xs font-medium">
+              <div className="flex items-center space-x-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Extraction job completed successfully! Downloaded {status.files_downloaded || 0} media items.</span>
+              </div>
+            </div>
+          )}
+
+          {status.state === 'failed' && (
+            <div className="bg-rose-50 border border-rose-200 text-rose-800 rounded-xl p-3.5 flex items-center space-x-2 text-xs font-medium">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>Extraction failed: {status.error || 'An unexpected error occurred.'}</span>
+            </div>
+          )}
+
+          {status.state === 'cancelled' && (
+            <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3.5 flex items-center space-x-2 text-xs font-medium">
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>Extraction job was cancelled by user.</span>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 pt-1">
             {/* Target Child Selector (First) */}
             <div className="space-y-1.5">
@@ -236,8 +297,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
               <select
                 value={targetChild}
                 onChange={(e) => setTargetChild(e.target.value)}
-                disabled={status.state === 'running'}
-                className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 sm:py-2 text-xs text-slate-800 focus:border-indigo-600 outline-none transition font-medium"
+                disabled={isInputDisabled}
+                className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 sm:py-2 text-xs text-slate-800 focus:border-indigo-600 outline-none transition font-medium disabled:opacity-50"
               >
                 <option value="all">All Enrolled Children</option>
                 {childrenList && childrenList.map((c: any, i: number) => {
@@ -263,39 +324,39 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
                 <button
                   type="button"
                   onClick={() => setSyncMode('incremental')}
-                  disabled={status.state === 'running'}
+                  disabled={isInputDisabled}
                   title="Resume from last sync date, extracting only new posts."
                   className={`py-2 sm:py-1.5 rounded-lg transition ${
                     syncMode === 'incremental'
                       ? 'bg-white text-indigo-700 font-semibold border border-slate-200 shadow-sm'
                       : 'text-slate-500 hover:text-slate-800'
-                  }`}
+                  } disabled:opacity-50`}
                 >
                   Incremental
                 </button>
                 <button
                   type="button"
                   onClick={() => setSyncMode('full')}
-                  disabled={status.state === 'running'}
+                  disabled={isInputDisabled}
                   title="Rescan all historical media across all history for the selected child or all enrolled children."
                   className={`py-2 sm:py-1.5 rounded-lg transition ${
                     syncMode === 'full'
                       ? 'bg-white text-indigo-700 font-semibold border border-slate-200 shadow-sm'
                       : 'text-slate-500 hover:text-slate-800'
-                  }`}
+                  } disabled:opacity-50`}
                 >
                   Full
                 </button>
                 <button
                   type="button"
                   onClick={() => setSyncMode('custom')}
-                  disabled={status.state === 'running'}
+                  disabled={isInputDisabled}
                   title="Extract media published on or after a selected custom start date."
                   className={`py-2 sm:py-1.5 rounded-lg transition ${
                     syncMode === 'custom'
                       ? 'bg-white text-indigo-700 font-semibold border border-slate-200 shadow-sm'
                       : 'text-slate-500 hover:text-slate-800'
-                  }`}
+                  } disabled:opacity-50`}
                 >
                   Custom
                 </button>
@@ -317,8 +378,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
                   type="date"
                   value={startDate}
                   onChange={(e) => setStartDate(e.target.value)}
-                  disabled={status.state === 'running'}
-                  className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2 text-xs font-mono text-slate-800 focus:border-indigo-600 outline-none transition"
+                  disabled={isInputDisabled}
+                  className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2 text-xs font-mono text-slate-800 focus:border-indigo-600 outline-none transition disabled:opacity-50"
                 />
               </div>
             )}
