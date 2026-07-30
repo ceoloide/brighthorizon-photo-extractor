@@ -750,6 +750,14 @@ class ScraperJob:
                 pass
             time.sleep(1.0)
             
+        if len(timeframe_lis) == 0:
+            current_url = page.url.lower()
+            body_txt = page.locator("body").inner_text().lower()
+            if "login" in current_url or "sso" in current_url or "select a child above" in body_txt:
+                self.log(f"Session expired or unauthenticated while accessing timeline for {child_name}. Clearing expired session files.")
+                self.tenant_storage.clear_session()
+                raise Exception("Session expired or invalid. Please re-authenticate and import fresh session tokens.")
+
         self.log(f"Found {len(timeframe_lis)} timeframe month links for {child_name}.")
         
         self.status["current_child"] = child_name
