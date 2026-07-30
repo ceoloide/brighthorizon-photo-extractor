@@ -3,21 +3,28 @@ import json
 
 FLARESOLVERR_URL = "http://192.168.1.176:8191/v1"
 
-payload = {
+print("1. Requesting FlareSolverr clearance for familyinfocenter...")
+resp1 = requests.post(FLARESOLVERR_URL, json={
     "cmd": "request.get",
-    "url": "https://bhloginsso.brighthorizons.com/u/login/identifier",
+    "url": "https://familyinfocenter.brighthorizons.com/okta/login",
     "maxTimeout": 60000
-}
+}, timeout=65).json()
 
-print(f"[FlareSolverr] Sending request to {FLARESOLVERR_URL}...")
-try:
-    resp = requests.post(FLARESOLVERR_URL, json=payload, timeout=70)
-    print(f"[FlareSolverr] Status Code: {resp.status_code}")
-    data = resp.json()
-    print(f"[FlareSolverr] Status: {data.get('status')}")
-    solution = data.get("solution", {})
-    print(f"[FlareSolverr] Cookies: {len(solution.get('cookies', []))}")
-    for c in solution.get('cookies', []):
-        print(f"  Cookie: {c['name']} = {c['value'][:15]}... ({c['domain']})")
-except Exception as e:
-    print(f"[FlareSolverr Error]: {e}")
+print("FlareSolverr status 1:", resp1.get("status"))
+cookies1 = resp1.get("solution", {}).get("cookies", [])
+print(f"Received {len(cookies1)} cookies from FlareSolverr step 1.")
+for c in cookies1:
+    print(f"  Cookie: {c['name']} = {c['value'][:15]}... domain={c['domain']}")
+
+print("\n2. Requesting FlareSolverr clearance for bhloginsso.brighthorizons.com...")
+resp2 = requests.post(FLARESOLVERR_URL, json={
+    "cmd": "request.get",
+    "url": "https://bhloginsso.brighthorizons.com",
+    "maxTimeout": 60000
+}, timeout=65).json()
+
+print("FlareSolverr status 2:", resp2.get("status"))
+cookies2 = resp2.get("solution", {}).get("cookies", [])
+print(f"Received {len(cookies2)} cookies from FlareSolverr step 2.")
+for c in cookies2:
+    print(f"  Cookie: {c['name']} = {c['value'][:15]}... domain={c['domain']}")

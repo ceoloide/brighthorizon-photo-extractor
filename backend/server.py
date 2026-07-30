@@ -56,9 +56,10 @@ class ImportSessionRequest(BaseModel):
     payload: Dict[str, Any]
 
 class ExtractionRequest(BaseModel):
-    sync_mode: str = "incremental" # "incremental" or "full"
-    layout_mode: str = "flat"      # "flat" or "nested"
+    sync_mode: str = "incremental" # "incremental", "full", or "custom"
+    start_date: Optional[str] = None # "YYYY-MM-DD"
     child: str = "all"
+    force: bool = False
     password: Optional[str] = None
 
 class ArchiveRequest(BaseModel):
@@ -445,16 +446,27 @@ def start_extraction(req: ExtractionRequest, tenant: TenantStorage = Depends(get
     tenant_id = tenant.tenant_id
     
     if tenant_id in _active_jobs and _active_jobs[tenant_id].status["state"] == "running":
-        return {"status": "already_running", "job": _active_jobs[tenant_id].status}
-        
+        if not req.force:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "status": "running_conflict",
+                    "message": "An extraction job is currently running.",
+                    "job": _active_jobs[tenant_id].status
+                }
+            )
+        else:
+            old_job = _active_jobs.pop(tenant_id, None)
+            if old_job:
+                old_job.cancel()
+                
     config = tenant.load_config()
-    pwd = req.password or config.get("password")
-    if not pwd:
-        raise HTTPException(status_code=400, detail="Password is required to start extraction")
+    pwd = req.password or config.get("password") or "imported_session"
         
     options = {
         "sync_mode": req.sync_mode,
-        "layout_mode": req.layout_mode,
+        "start_date": req.start_date,
+        "layout_mode": "flat",
         "child": req.child
     }
     
@@ -465,6 +477,15 @@ def start_extraction(req: ExtractionRequest, tenant: TenantStorage = Depends(get
     thread.start()
     
     return {"status": "started", "job": job.status}
+
+@app.post("/api/extraction/cancel")
+def cancel_extraction(tenant: TenantStorage = Depends(get_current_tenant)):
+    tenant_id = tenant.tenant_id
+    if tenant_id in _active_jobs:
+        job = _active_jobs[tenant_id]
+        job.cancel()
+        return {"status": "cancelled", "message": "Extraction job cancellation requested."}
+    return {"status": "idle", "message": "No active job running."}
 
 @app.get("/api/extraction/status")
 def extraction_status(tenant: TenantStorage = Depends(get_current_tenant)):

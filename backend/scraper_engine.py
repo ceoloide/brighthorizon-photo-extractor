@@ -57,14 +57,16 @@ class ScraperJob:
         self.email = tenant_storage.email
         self.password = password
         self.options = options
-        self.log_callback = log_callback or (lambda msg: print(f"[{self.email}] {msg}"))
-        
-        self.sync_mode = options.get("sync_mode", "incremental") # "incremental" or "full"
-        self.layout_mode = options.get("layout_mode", "flat") # "flat" or "nested"
+        self.sync_mode = options.get("sync_mode", "incremental") # "incremental", "full", "custom"
+        self.start_date = options.get("start_date") # "YYYY-MM-DD" string
+        self.layout_mode = "flat" # Hardcode to flat mode
         self.target_child = options.get("child", "all")
+        self.log_callback = log_callback or (lambda msg: print(f"[{self.email}] {msg}"))
+        self._active_page: Optional[Page] = None
+        self._cancelled = False
         
         self.status = {
-            "state": "idle", # "idle", "running", "mfa_required", "completed", "failed"
+            "state": "idle",
             "current_step": "Initializing",
             "files_downloaded": 0,
             "error": None,
@@ -726,10 +728,16 @@ class ScraperJob:
         timeframe_lis = page.locator("li", has_text=re.compile(r'^[a-z]{3}\s+\d{4}$', re.IGNORECASE)).all()
         self.log(f"Found {len(timeframe_lis)} timeframe month links for {child_name}.")
         
+        self.status["current_child"] = child_name
         manifest = self.tenant_storage.load_manifest()
         
         for tf_li in timeframe_lis:
+            if self._cancelled:
+                self.log("Extraction cancelled by user.")
+                return
+
             tf_text = tf_li.inner_text().strip()
+            self.status["current_month"] = tf_text
             self.log(f"Navigating to timeframe: {tf_text}...")
             
             # Click inner div.tile (rule 2.A in AGENTS.md)
@@ -751,6 +759,10 @@ class ScraperJob:
             self.log(f"Extracted {len(feed_items)} posts from timeframe {tf_text}.")
             
             for item in feed_items:
+                if self._cancelled:
+                    self.log("Extraction cancelled by user.")
+                    return
+
                 try:
                     fancybox = item.locator("a.fancybox").first
                     if fancybox.count() == 0:
@@ -781,6 +793,17 @@ class ScraperJob:
                     if existing_entry and self.sync_mode == "incremental":
                         self.log(f"Incremental sync hit existing obj_id {obj_id[:8]}... Stopping child feed scan.")
                         return
+
+                    # Parse date overlay
+                    overlay_span = item.locator("span.name span").first
+                    date_text = overlay_span.inner_text().strip() if overlay_span.count() > 0 else ""
+                    date_str = parse_date(date_text, tf_text)
+                    self.status["current_date"] = date_str
+
+                    # Check Custom Start Date condition
+                    if self.start_date and date_str < self.start_date:
+                        self.log(f"Post date {date_str} is before custom start date {self.start_date}. Skipping.")
+                        continue
                         
                     # Extract full res URL
                     download_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={obj_id}&key={obj_id}"

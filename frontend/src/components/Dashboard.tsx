@@ -11,13 +11,14 @@ interface DashboardProps {
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList = [], onLogout }) => {
-  const [syncMode, setSyncMode] = useState<'incremental' | 'full'>('incremental');
-  const [layoutMode, setLayoutMode] = useState<'flat' | 'nested'>('flat');
+  const [syncMode, setSyncMode] = useState<'incremental' | 'full' | 'custom'>('incremental');
+  const [startDate, setStartDate] = useState<string>('');
   const [targetChild, setTargetChild] = useState<string>('all');
   const [status, setStatus] = useState<any>({ state: 'idle', logs: [] });
   const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
   const [showLogs, setShowLogs] = useState<boolean>(true);
   const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
+  const [showConflictModal, setShowConflictModal] = useState<boolean>(false);
   const [deleting, setDeleting] = useState<boolean>(false);
 
   const fetchStatus = async () => {
@@ -44,12 +45,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
   useEffect(() => {
     let interval: any;
     if (status.state === 'running') {
-      interval = setInterval(fetchStatus, 2000);
+      interval = setInterval(fetchStatus, 1500);
     }
     return () => clearInterval(interval);
   }, [status.state]);
 
-  const handleStartExtraction = async () => {
+  const handleStartExtraction = async (force: boolean = false) => {
+    setShowConflictModal(false);
     try {
       const res = await fetch('/api/extraction/start', {
         method: 'POST',
@@ -59,16 +61,33 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
         },
         body: JSON.stringify({
           sync_mode: syncMode,
-          layout_mode: layoutMode,
-          child: targetChild
+          start_date: startDate || undefined,
+          child: targetChild,
+          force: force
         })
       });
       const data = await res.json();
+      if (res.status === 409 || data.status === 'running_conflict') {
+        setShowConflictModal(true);
+        return;
+      }
       if (res.ok) {
         setStatus(data.job || data);
       }
     } catch (err) {
       console.error('Failed to start extraction:', err);
+    }
+  };
+
+  const handleCancelExtraction = async () => {
+    try {
+      await fetch('/api/extraction/cancel', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      fetchStatus();
+    } catch (err) {
+      console.error('Failed to cancel extraction:', err);
     }
   };
 
@@ -141,40 +160,76 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
                 <span>Extraction Control Panel</span>
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                Configure sync options and download photos and videos.
+                Configure sync options and download child photos and videos.
               </p>
             </div>
 
-            <button
-              onClick={handleStartExtraction}
-              disabled={status.state === 'running'}
-              className="w-full sm:w-auto px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition disabled:opacity-50 flex items-center justify-center gap-2 shadow-sm active:scale-[0.99]"
-            >
+            <div className="flex items-center gap-2">
               {status.state === 'running' ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>Extracting Photos...</span>
-                </>
+                <button
+                  onClick={handleCancelExtraction}
+                  className="w-full sm:w-auto px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-xl transition flex items-center justify-center gap-1.5 shadow-sm"
+                >
+                  <AlertCircle className="w-4 h-4" />
+                  <span>Cancel Job</span>
+                </button>
               ) : (
-                <>
+                <button
+                  onClick={() => handleStartExtraction(false)}
+                  className="w-full sm:w-auto px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition flex items-center justify-center gap-2 shadow-sm active:scale-[0.99]"
+                >
                   <Play className="w-4 h-4 fill-current" />
                   <span>Start Extraction</span>
-                </>
+                </button>
               )}
-            </button>
+            </div>
           </div>
 
+          {/* Live Progress Card if Job is Running */}
+          {status.state === 'running' && (
+            <div className="bg-indigo-50/60 border border-indigo-100 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2 text-xs font-semibold text-indigo-900">
+                  <RefreshCw className="w-4 h-4 text-indigo-600 animate-spin" />
+                  <span>Job Running: {status.current_step || 'Processing...'}</span>
+                </div>
+                <span className="text-xs font-mono font-bold text-indigo-700 bg-white border border-indigo-200 px-2.5 py-1 rounded-lg shadow-2xs">
+                  {status.files_downloaded || 0} Files Downloaded
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-xs">
+                <div className="bg-white p-2.5 rounded-lg border border-indigo-100/80">
+                  <span className="text-[10px] uppercase tracking-wider font-semibold text-slate-400 block">Target Child</span>
+                  <span className="font-bold text-slate-800">{status.current_child || 'All Enrolled Children'}</span>
+                </div>
+                <div className="bg-white p-2.5 rounded-lg border border-indigo-100/80">
+                  <span className="text-[10px] uppercase tracking-wider font-semibold text-slate-400 block">Timeline Month</span>
+                  <span className="font-bold text-slate-800">{status.current_month || 'Loading...'}</span>
+                </div>
+                <div className="bg-white p-2.5 rounded-lg border border-indigo-100/80">
+                  <span className="text-[10px] uppercase tracking-wider font-semibold text-slate-400 block">Current Post Date</span>
+                  <span className="font-bold text-indigo-600 font-mono">{status.current_date || '—'}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 pt-1">
-            {/* Sync Mode Segment Control */}
+            {/* Sync Mode Controls */}
             <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                Sync Mode
-              </label>
-              <div className="grid grid-cols-2 p-1 bg-slate-100 border border-slate-200 rounded-xl text-xs font-medium">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                  Sync Mode
+                </label>
+              </div>
+
+              <div className="grid grid-cols-3 p-1 bg-slate-100 border border-slate-200 rounded-xl text-xs font-medium">
                 <button
                   type="button"
                   onClick={() => setSyncMode('incremental')}
                   disabled={status.state === 'running'}
+                  title="Resume from last sync date, extracting only new posts."
                   className={`py-2 sm:py-1.5 rounded-lg transition ${
                     syncMode === 'incremental'
                       ? 'bg-white text-indigo-700 font-semibold border border-slate-200 shadow-sm'
@@ -187,54 +242,54 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
                   type="button"
                   onClick={() => setSyncMode('full')}
                   disabled={status.state === 'running'}
+                  title="Rescan all historical media and update existing entries."
                   className={`py-2 sm:py-1.5 rounded-lg transition ${
                     syncMode === 'full'
                       ? 'bg-white text-indigo-700 font-semibold border border-slate-200 shadow-sm'
                       : 'text-slate-500 hover:text-slate-800'
                   }`}
                 >
-                  Full Rescan
+                  Full
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSyncMode('custom')}
+                  disabled={status.state === 'running'}
+                  title="Extract media published on or after a selected custom start date."
+                  className={`py-2 sm:py-1.5 rounded-lg transition ${
+                    syncMode === 'custom'
+                      ? 'bg-white text-indigo-700 font-semibold border border-slate-200 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  Custom
                 </button>
               </div>
+              <p className="text-[10px] text-slate-400 italic">
+                {syncMode === 'incremental' && '• Resumes from last sync date, skipping existing downloads.'}
+                {syncMode === 'full' && '• Scans entire history for all enrolled children.'}
+                {syncMode === 'custom' && '• Filter posts published on or after custom start date.'}
+              </p>
             </div>
 
-            {/* Storage Layout Segment Control */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                Storage Layout
-              </label>
-              <div className="grid grid-cols-2 p-1 bg-slate-100 border border-slate-200 rounded-xl text-xs font-medium">
-                <button
-                  type="button"
-                  onClick={() => setLayoutMode('flat')}
+            {/* Custom Date Picker (when Custom start is selected) */}
+            {syncMode === 'custom' && (
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                  Start Date
+                </label>
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
                   disabled={status.state === 'running'}
-                  className={`py-2 sm:py-1.5 rounded-lg transition flex items-center justify-center gap-1.5 ${
-                    layoutMode === 'flat'
-                      ? 'bg-white text-indigo-700 font-semibold border border-slate-200 shadow-sm'
-                      : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <FileSpreadsheet className="w-3.5 h-3.5" />
-                  <span>Flat</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setLayoutMode('nested')}
-                  disabled={status.state === 'running'}
-                  className={`py-2 sm:py-1.5 rounded-lg transition flex items-center justify-center gap-1.5 ${
-                    layoutMode === 'nested'
-                      ? 'bg-white text-indigo-700 font-semibold border border-slate-200 shadow-sm'
-                      : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <FolderTree className="w-3.5 h-3.5" />
-                  <span>Nested</span>
-                </button>
+                  className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2 text-xs font-mono text-slate-800 focus:border-indigo-600 outline-none transition"
+                />
               </div>
-            </div>
+            )}
 
             {/* Target Child Selector */}
-            <div className="space-y-1.5 sm:col-span-2 md:col-span-1">
+            <div className="space-y-1.5">
               <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
                 Target Child
               </label>
@@ -351,6 +406,45 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
                     <span>Confirm Delete</span>
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Job Running Conflict Confirmation Modal */}
+      {showConflictModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+          <div className="max-w-md w-full bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-xl space-y-4">
+            <div className="flex items-center gap-3 text-amber-600">
+              <div className="p-2 bg-amber-50 rounded-xl border border-amber-100 shrink-0">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <h3 className="font-bold text-slate-900 text-base">Extraction Job Already Running</h3>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              An extraction job is currently active for your account. Starting a new job will cancel the existing job in progress.
+            </p>
+            <p className="text-[11px] text-amber-700 font-medium">
+              Only a single active background job is allowed per account.
+            </p>
+
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowConflictModal(false)}
+                className="w-full sm:w-auto px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition border border-slate-200"
+              >
+                Keep Current Job
+              </button>
+              <button
+                type="button"
+                onClick={() => handleStartExtraction(true)}
+                className="w-full sm:w-auto px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-xl transition shadow-sm flex items-center justify-center gap-2"
+              >
+                <Play className="w-3.5 h-3.5 fill-current" />
+                <span>Stop Old & Start New Job</span>
               </button>
             </div>
           </div>
