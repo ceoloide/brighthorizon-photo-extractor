@@ -151,6 +151,8 @@ class ScraperJob:
         self.status["state"] = "cancelled"
         self.status["current_step"] = "Extraction cancelled by user"
         self.log("Job cancellation requested by user.")
+        self._mfa_event.set()
+        self._step_event.set()
         if hasattr(self, "_active_page") and self._active_page:
             try:
                 self._active_page.context.close()
@@ -611,6 +613,7 @@ class ScraperJob:
                 context.add_cookies(formatted_cookies)
             
             page: Page = context.new_page()
+            self._active_page = page
             try:
                 from playwright_stealth import Stealth
                 Stealth().apply_stealth_sync(page)
@@ -646,6 +649,7 @@ class ScraperJob:
                 update_progress(f"Verification error: {e}", 3, page=page, force_shot=True)
                 raise e
             finally:
+                self._active_page = None
                 try: context.close()
                 except Exception: pass
 
