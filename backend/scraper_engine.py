@@ -230,7 +230,7 @@ class ScraperJob:
 
                 if not all_children:
                     all_children = [
-                        {"name": "Byron", "dependent_id": "601449c256be472ca2a7b830"},
+                        {"name": "Byron", "dependent_id": "673e065a9d37c9fab2483b2d"},
                         {"name": "Catherine", "dependent_id": "6322019106aa0d39b230f4a0"}
                     ]
 
@@ -561,7 +561,7 @@ class ScraperJob:
             if not children:
                 # Default child list from known dependent IDs
                 children = [
-                    {"name": "Byron", "dependent_id": "601449c256be472ca2a7b830"},
+                    {"name": "Byron", "dependent_id": "673e065a9d37c9fab2483b2d"},
                     {"name": "Catherine", "dependent_id": "6322019106aa0d39b230f4a0"}
                 ]
                 
@@ -746,7 +746,21 @@ class ScraperJob:
         self.log(f"Processing feed for {child_name} (Sync Mode: {self.sync_mode.upper()})...")
         url = f"https://mybrightday.brighthorizons.com/dashboard/parents.html?dependent_id={dep_id}"
         page.goto(url, wait_until="domcontentloaded")
+        time.sleep(3.0)
         
+        # Check if child tile needs to be clicked to trigger Knockout.js month links
+        try:
+            tiles = page.locator("li, div.tile, a, span").all()
+            for el in tiles:
+                txt = el.inner_text().strip().lower()
+                if txt == child_name.strip().lower() or txt.startswith(child_name.strip().lower()):
+                    self.log(f"Clicking child selection tile for '{child_name}'...")
+                    el.click()
+                    time.sleep(2.0)
+                    break
+        except Exception:
+            pass
+            
         # Dynamic wait up to 45s for Knockout.js timeframe month links to populate
         timeframe_lis = []
         start_wait = time.time()
