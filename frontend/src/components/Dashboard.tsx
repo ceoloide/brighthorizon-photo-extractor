@@ -6,10 +6,11 @@ import { ArchiveManager } from './ArchiveManager';
 interface DashboardProps {
   token: string;
   email: string;
+  childrenList?: any[];
   onLogout: () => void;
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ token, email, onLogout }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList = [], onLogout }) => {
   const [syncMode, setSyncMode] = useState<'incremental' | 'full'>('incremental');
   const [layoutMode, setLayoutMode] = useState<'flat' | 'nested'>('flat');
   const [targetChild, setTargetChild] = useState<string>('all');
@@ -241,9 +242,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, onLogout }) 
                 value={targetChild}
                 onChange={(e) => setTargetChild(e.target.value)}
                 disabled={status.state === 'running'}
-                className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 sm:py-2 text-xs text-slate-800 focus:border-indigo-600 outline-none transition"
+                className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 sm:py-2 text-xs text-slate-800 focus:border-indigo-600 outline-none transition font-medium"
               >
                 <option value="all">All Enrolled Children</option>
+                {childrenList && childrenList.map((c: any, i: number) => {
+                  const name = typeof c === 'string' ? c : c.name;
+                  return (
+                    <option key={i} value={name.toLowerCase()}>
+                      {name}
+                    </option>
+                  );
+                })}
               </select>
             </div>
           </div>

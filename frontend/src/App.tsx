@@ -6,6 +6,7 @@ import { Dashboard } from './components/Dashboard';
 export const App: React.FC = () => {
   const [token, setToken] = useState<string | null>(localStorage.getItem('bh_token'));
   const [email, setEmail] = useState<string | null>(localStorage.getItem('bh_email'));
+  const [childrenList, setChildrenList] = useState<any[]>([]);
   const [checking, setChecking] = useState<boolean>(true);
   const [isMobile, setIsMobile] = useState<boolean>(false);
 
@@ -33,6 +34,7 @@ export const App: React.FC = () => {
           if (activeEmail) localStorage.setItem('bh_email', activeEmail);
           setToken(activeToken);
           setEmail(activeEmail);
+          if (data.children) setChildrenList(data.children);
         } else {
           handleLogout();
         }
@@ -46,12 +48,13 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  const handleSessionSuccess = (userEmail: string) => {
+  const handleSessionSuccess = (userEmail: string, discoveredChildren?: any[]) => {
     const dummyToken = 'device_session_' + Date.now();
     localStorage.setItem('bh_token', dummyToken);
     localStorage.setItem('bh_email', userEmail);
     setToken(dummyToken);
     setEmail(userEmail);
+    if (discoveredChildren) setChildrenList(discoveredChildren);
   };
 
   const handleLogout = async () => {
@@ -62,6 +65,7 @@ export const App: React.FC = () => {
     localStorage.removeItem('bh_email');
     setToken(null);
     setEmail(null);
+    setChildrenList([]);
   };
 
   if (isMobile) {
@@ -80,7 +84,7 @@ export const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
       {token && email ? (
-        <Dashboard token={token} email={email} onLogout={handleLogout} />
+        <Dashboard token={token} email={email} childrenList={childrenList} onLogout={handleLogout} />
       ) : (
         <DesktopSessionStepper onSuccess={handleSessionSuccess} />
       )}
