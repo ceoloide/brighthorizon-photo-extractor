@@ -735,22 +735,21 @@ class ScraperJob:
         self.log(f"Processing feed for {child_name} (Sync Mode: {self.sync_mode.upper()})...")
         url = f"https://mybrightday.brighthorizons.com/dashboard/parents.html?dependent_id={dep_id}"
         page.goto(url, wait_until="domcontentloaded")
-        page.wait_for_timeout(3000)
         
-        # Enforce top bar child filter click if rendered
-        try:
-            top_bar_tiles = page.locator("ul.thumbnails li, div.thumbnails div.tile").all()
-            for t_item in top_bar_tiles:
-                if child_name.lower() in t_item.inner_text().lower():
-                    t_item.click()
-                    self.log(f"Enforced child filter click on top bar tile for '{child_name}'.")
-                    page.wait_for_timeout(1500)
+        # Dynamic wait up to 10s for Knockout.js timeframe month links to populate
+        timeframe_lis = []
+        start_wait = time.time()
+        while time.time() - start_wait < 10.0:
+            try:
+                lis = page.locator("li").all()
+                matching = [li for li in lis if re.search(r'[a-z]{3}\s+\d{4}', li.inner_text().strip(), re.IGNORECASE)]
+                if matching:
+                    timeframe_lis = matching
                     break
-        except Exception:
-            pass
-
-        # Scrape timeframe links
-        timeframe_lis = page.locator("li", has_text=re.compile(r'^[a-z]{3}\s+\d{4}$', re.IGNORECASE)).all()
+            except Exception:
+                pass
+            time.sleep(1.0)
+            
         self.log(f"Found {len(timeframe_lis)} timeframe month links for {child_name}.")
         
         self.status["current_child"] = child_name
