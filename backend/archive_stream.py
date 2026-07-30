@@ -53,14 +53,21 @@ def start_zip_task(tenant_storage: TenantStorage, layout: str = "flat") -> Dict[
             
             with zipfile.ZipFile(target_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 processed = 0
+                used_arcnames = set()
+                tenant_dir_abs = os.path.abspath(tenant_storage.tenant_dir)
+                
                 for media_id, item in manifest.items():
                     rel_path = item["storage_path"]
-                    abs_src = os.path.join(tenant_storage.tenant_dir, rel_path)
+                    abs_src = os.path.abspath(os.path.join(tenant_storage.tenant_dir, rel_path))
                     
+                    # Security: Enforce path traversal check
+                    if not abs_src.startswith(tenant_dir_abs):
+                        processed += 1
+                        continue
+
                     if os.path.exists(abs_src):
                         child = item.get("child", "Child")
                         orig_name = item.get("original_filename", f"{media_id}.jpg")
-                        date_str = item.get("date", "")
                         year = item.get("year", "")
                         month = item.get("month", "")
                         
@@ -69,6 +76,12 @@ def start_zip_task(tenant_storage: TenantStorage, layout: str = "flat") -> Dict[
                         else:
                             arcname = os.path.join(child, orig_name)
                             
+                        # Resolve filename collisions cleanly inside ZIP
+                        if arcname in used_arcnames:
+                            base, ext = os.path.splitext(arcname)
+                            arcname = f"{base}_{media_id[:6]}{ext}"
+                        used_arcnames.add(arcname)
+
                         zf.write(abs_src, arcname=arcname)
                     
                     processed += 1

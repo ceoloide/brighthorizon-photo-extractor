@@ -157,9 +157,9 @@ def test_mfa_rate_limiting_behavior():
             except HTTPException as e:
                 responses.append(e.status_code)
 
-        # Document current behavior: all 5 calls return 400 (Failed to submit MFA verification code)
-        # because rate limiting middleware/tracker is missing on this endpoint.
-        assert responses == [400, 400, 400, 400, 400]
+        # Document rate limiting behavior: first 3 calls return 400 (Failed to submit MFA verification code)
+        # followed by 429 (Too Many Requests) on subsequent attempts due to rate limiting enforcement.
+        assert responses == [400, 400, 400, 429, 429]
     finally:
         _active_verifications.pop(storage.tenant_id, None)
 

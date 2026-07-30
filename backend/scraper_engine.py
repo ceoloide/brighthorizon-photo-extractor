@@ -858,20 +858,32 @@ class ScraperJob:
             page.wait_for_timeout(1000)
 
 def parse_date(date_text: str, timeframe_text: str) -> str:
-    """Parses date string into YYYY-MM-DD format."""
+    """Parses date string into YYYY-MM-DD format using timeframe_text year context."""
     now = datetime.now()
+    
+    # Extract year from timeframe_text (e.g. "jun 2024" -> 2024)
+    tf_year = None
+    if timeframe_text:
+        m_tf = re.search(r'\b(20\d{2})\b', timeframe_text)
+        if m_tf:
+            tf_year = int(m_tf.group(1))
+
     if not date_text:
-        return now.strftime("%Y-%m-%d")
+        year_val = tf_year or now.year
+        return f"{year_val:04d}-{now.month:02d}-{now.day:02d}"
+
     m = re.search(r'(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?', date_text)
     if m:
         month, day, year = m.groups()
         if not year:
-            year = now.year
+            year = tf_year or now.year
         else:
             year = int(year)
             if year < 100: year += 2000
         return f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
-    return now.strftime("%Y-%m-%d")
+
+    year_val = tf_year or now.year
+    return f"{year_val:04d}-{now.month:02d}-{now.day:02d}"
 
 def detect_extension(file_bytes: bytes, content_type: str) -> str:
     """Inspects magic bytes to determine file extension."""
