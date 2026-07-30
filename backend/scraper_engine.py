@@ -483,26 +483,12 @@ class ScraperJob:
                 "--window-size=1280,720"
             ]
             
-            context_kwargs = {
-                "args": args,
-                "ignore_default_args": ["--enable-automation"],
-                "headless": False,
-                "viewport": {"width": 1280, "height": 720}
-            }
-            
             try:
-                context = p.chromium.launch_persistent_context(user_data_dir, channel="chrome", **context_kwargs)
+                browser = p.chromium.launch(headless=False, channel="chrome", args=args, ignore_default_args=["--enable-automation"])
             except Exception:
-                context = p.chromium.launch_persistent_context(user_data_dir, **context_kwargs)
+                browser = p.chromium.launch(headless=False, args=args, ignore_default_args=["--enable-automation"])
                 
-            try:
-                with open(state_file, "r") as sf:
-                    state_data = json.load(sf)
-                if state_data.get("cookies"):
-                    context.add_cookies(state_data["cookies"])
-            except Exception as e:
-                self.log(f"Notice loading cookies: {e}")
-                
+            context = browser.new_context(storage_state=state_file, viewport={"width": 1280, "height": 720})
             page = context.new_page()
             self._active_page = page
             
@@ -548,6 +534,7 @@ class ScraperJob:
                 
             if not authenticated:
                 context.close()
+                browser.close()
                 self._active_page = None
                 raise Exception("Portal load timed out after 180 seconds. Please check session freshness.")
                 
@@ -555,6 +542,7 @@ class ScraperJob:
             children = self.discover_children(page, context)
             
             context.close()
+            browser.close()
             self._active_page = None
             
             return children
