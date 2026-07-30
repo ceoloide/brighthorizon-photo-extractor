@@ -1,53 +1,78 @@
 import React, { useState, useEffect } from 'react';
-import { LoginForm } from './components/LoginForm';
+import { MobileBlocked } from './components/MobileBlocked';
+import { DesktopSessionStepper } from './components/DesktopSessionStepper';
 import { Dashboard } from './components/Dashboard';
 
 export const App: React.FC = () => {
   const [token, setToken] = useState<string | null>(localStorage.getItem('bh_token'));
   const [email, setEmail] = useState<string | null>(localStorage.getItem('bh_email'));
   const [checking, setChecking] = useState<boolean>(true);
+  const [isMobile, setIsMobile] = useState<boolean>(false);
 
   useEffect(() => {
+    const checkMobile = () => {
+      const mobileUA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      const smallScreen = window.innerWidth < 768;
+      setIsMobile(mobileUA || smallScreen);
+    };
+
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+
     const checkAuth = async () => {
       const storedToken = localStorage.getItem('bh_token');
-      if (storedToken) {
-        try {
-          const res = await fetch('/api/auth/me', {
-            headers: { Authorization: `Bearer ${storedToken}` },
-          });
-          const data = await res.json();
-          if (res.ok) {
-            setToken(storedToken);
-            setEmail(data.email);
-          } else {
-            handleLogout();
-          }
-        } catch {
+      try {
+        const res = await fetch('/api/auth/me', {
+          headers: storedToken ? { Authorization: `Bearer ${storedToken}` } : {},
+        });
+        const data = await res.json();
+        if (res.ok && data.authenticated) {
+          const activeEmail = data.email || localStorage.getItem('bh_email');
+          const activeToken = data.token || storedToken || 'device_session_authenticated';
+          localStorage.setItem('bh_token', activeToken);
+          if (activeEmail) localStorage.setItem('bh_email', activeEmail);
+          setToken(activeToken);
+          setEmail(activeEmail);
+        } else {
           handleLogout();
         }
+      } catch {
+        handleLogout();
       }
       setChecking(false);
     };
+
     checkAuth();
+    return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  const handleLoginSuccess = (newToken: string, data: any) => {
-    setToken(newToken);
-    setEmail(data.email);
+  const handleSessionSuccess = (userEmail: string) => {
+    const dummyToken = 'device_session_' + Date.now();
+    localStorage.setItem('bh_token', dummyToken);
+    localStorage.setItem('bh_email', userEmail);
+    setToken(dummyToken);
+    setEmail(userEmail);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {}
     localStorage.removeItem('bh_token');
     localStorage.removeItem('bh_email');
     setToken(null);
     setEmail(null);
   };
 
+  if (isMobile) {
+    return <MobileBlocked />;
+  }
+
   if (checking) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center text-slate-500 gap-3">
         <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-        <span className="text-xs font-medium text-slate-600">Loading session...</span>
+        <span className="text-xs font-medium text-slate-600">Verifying session...</span>
       </div>
     );
   }
@@ -57,7 +82,7 @@ export const App: React.FC = () => {
       {token && email ? (
         <Dashboard token={token} email={email} onLogout={handleLogout} />
       ) : (
-        <LoginForm onLoginSuccess={handleLoginSuccess} />
+        <DesktopSessionStepper onSuccess={handleSessionSuccess} />
       )}
     </div>
   );

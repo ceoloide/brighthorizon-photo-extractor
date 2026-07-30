@@ -7,23 +7,49 @@ import sys
 import time
 import requests
 import struct
+import threading
 import zlib
 from datetime import datetime, timedelta
-from typing import Dict, Any, List, Callable, Optional
+from typing import Dict, Any, List, Callable, Optional, Tuple
 from zoneinfo import ZoneInfo
 from playwright.sync_api import sync_playwright, BrowserContext, Page
 from backend.database import TenantStorage
 
 FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://192.168.1.176:8191/v1")
 
-def capture_b64_screenshot(page: Page) -> Optional[str]:
-    """Captures a lightweight base64 JPEG screenshot from Playwright for live visual debug preview."""
+def ensure_xvfb_display(width=1280, height=720):
+    """Ensures Xvfb virtual display is active for headful Chromium execution."""
+    os.system("pkill -f Xvfb 2>/dev/null")
+    time.sleep(0.3)
+    os.system(f"Xvfb :99 -screen 0 {width}x{height}x24 > /dev/null 2>&1 &")
+    os.environ["DISPLAY"] = ":99"
+    time.sleep(0.5)
+
+def capture_compressed_b64_frame(page: Page, width=1280, height=720) -> Optional[str]:
+    """Captures a lightweight JPEG screenshot (quality=45) encoded in Base64 for live preview streaming."""
     try:
-        img_bytes = page.screenshot(type="jpeg", quality=60)
+        img_bytes = page.screenshot(type="jpeg", quality=45, clip={"x": 0, "y": 0, "width": width, "height": height})
         import base64
         return f"data:image/jpeg;base64,{base64.b64encode(img_bytes).decode('utf-8')}"
     except Exception:
-        return None
+        try:
+            img_bytes = page.screenshot(type="jpeg", quality=45)
+            import base64
+            return f"data:image/jpeg;base64,{base64.b64encode(img_bytes).decode('utf-8')}"
+        except Exception:
+            return None
+
+def clean_user_data_locks(user_data_dir: str):
+    """Safely removes stale Chromium Singleton lock files to prevent browser launch crashes."""
+    if not os.path.exists(user_data_dir):
+        return
+    for root, dirs, files in os.walk(user_data_dir):
+        for fname in files:
+            if "Singleton" in fname or fname == "RunningChromeVersion":
+                try:
+                    os.remove(os.path.join(root, fname))
+                except Exception:
+                    pass
 
 class ScraperJob:
     def __init__(self, tenant_storage: TenantStorage, password: str, options: Dict[str, Any], log_callback: Optional[Callable[[str], None]] = None):
@@ -38,12 +64,54 @@ class ScraperJob:
         self.target_child = options.get("child", "all")
         
         self.status = {
-            "state": "idle", # "idle", "running", "completed", "failed"
+            "state": "idle", # "idle", "running", "mfa_required", "completed", "failed"
             "current_step": "Initializing",
             "files_downloaded": 0,
             "error": None,
             "logs": []
         }
+        self._mfa_code: Optional[str] = None
+        self._mfa_event = threading.Event()
+        self._active_page: Optional[Page] = None
+        self._manual_step_mode: bool = options.get("manual_step_mode", False)
+        self._step_event = threading.Event()
+
+    def submit_mfa_code(self, code: str) -> bool:
+        """Thread-safe method to submit volatile MFA verification code from UI."""
+        code_clean = code.strip()
+        if not code_clean.isdigit() or len(code_clean) != 6:
+            return False
+        self._mfa_code = code_clean
+        self._mfa_event.set()
+        return True
+
+    def advance_step(self) -> bool:
+        """Thread-safe method to advance to the next substep when manual stepping is enabled."""
+        self._step_event.set()
+        return True
+
+    def human_type(self, page: Page, locator, text: str):
+        """Types text with realistic human keystroke intervals (65-145ms per key with natural pauses)."""
+        import random
+        locator.click(force=True)
+        page.wait_for_timeout(random.randint(150, 300))
+        locator.fill("")
+        page.wait_for_timeout(random.randint(100, 200))
+        for char in text:
+            locator.type(char, delay=random.randint(65, 145))
+            if random.random() < 0.15:
+                page.wait_for_timeout(random.randint(100, 220))
+
+    def click_preview(self, x_percent: float, y_percent: float):
+        """Replicates a user tap or click from the 360x640 mobile preview onto the XVFB headful browser page."""
+        if hasattr(self, "_active_page") and self._active_page and not self._active_page.is_closed():
+            try:
+                x_px = int(x_percent * 360)
+                y_px = int(y_percent * 640)
+                self.log(f"Replicating preview tap at ({x_px}px, {y_px}px) on 360x640 mobile display...")
+                self._active_page.mouse.click(x_px, y_px)
+            except Exception as e:
+                self.log(f"Preview tap replication error: {e}")
 
     def log(self, message: str):
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -53,8 +121,8 @@ class ScraperJob:
             self.status["logs"].pop(0)
         self.log_callback(entry)
 
-    def solve_cloudflare_flaresolverr(self, target_url: str) -> List[Dict[str, Any]]:
-        """Queries FlareSolverr API to resolve Cloudflare turnstile/bot challenges and return session cookies."""
+    def solve_cloudflare_flaresolverr(self, target_url: str) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        """Queries FlareSolverr API to resolve Cloudflare turnstile/bot challenges and return session cookies & matching User-Agent."""
         try:
             self.log(f"Querying FlareSolverr endpoint ({FLARESOLVERR_URL}) to bypass Cloudflare protection...")
             payload = {
@@ -68,11 +136,12 @@ class ScraperJob:
                 if data.get("status") == "ok":
                     solution = data.get("solution", {})
                     cookies = solution.get("cookies", [])
+                    user_agent = solution.get("userAgent")
                     self.log(f"FlareSolverr successfully resolved challenge ({len(cookies)} clearance cookies received).")
-                    return cookies
+                    return cookies, user_agent
         except Exception as e:
             self.log(f"FlareSolverr request failed (will fall back to native Playwright stealth): {e}")
-        return []
+        return [], None
 
     def run(self):
         self.status["state"] = "running"
@@ -82,24 +151,54 @@ class ScraperJob:
         user_data_dir = self.tenant_storage.user_data_dir
         
         try:
-            # Query FlareSolverr for initial clearance cookies
-            clearance_cookies = self.solve_cloudflare_flaresolverr("https://familyinfocenter.brighthorizons.com/home")
+            # Query FlareSolverr for initial clearance cookies & User-Agent
+            clearance_cookies, solver_ua = self.solve_cloudflare_flaresolverr("https://familyinfocenter.brighthorizons.com/home")
             
+            ensure_xvfb_display()
             with sync_playwright() as p:
                 args = [
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
-                    "--disable-dev-shm-usage"
+                    "--disable-dev-shm-usage",
+                    "--window-size=360,640",
+                    "--use-mobile-user-agent"
                 ]
                 
-                context: BrowserContext = p.chromium.launch_persistent_context(
-                    user_data_dir,
-                    headless=True,
-                    args=args,
-                    ignore_default_args=["--enable-automation"],
-                    user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-                )
+                context_kwargs = {
+                    "args": args,
+                    "ignore_default_args": ["--enable-automation"],
+                    "headless": False,
+                    "viewport": {"width": 360, "height": 640},
+                    "is_mobile": True,
+                    "has_touch": True,
+                    "device_scale_factor": 2,
+                    "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+                }
                 
+                # Attempt using real Chrome browser channel if available
+                try:
+                    context: BrowserContext = p.chromium.launch_persistent_context(
+                        user_data_dir,
+                        channel="chrome",
+                        **context_kwargs
+                    )
+                except Exception:
+                    context: BrowserContext = p.chromium.launch_persistent_context(
+                        user_data_dir,
+                        **context_kwargs
+                    )
+                
+                state_file = os.path.join(user_data_dir, "storage_state.json")
+                if os.path.exists(state_file):
+                    try:
+                        with open(state_file, "r") as sf:
+                            state_data = json.load(sf)
+                        if state_data.get("cookies"):
+                            context.add_cookies(state_data["cookies"])
+                            self.log(f"Loaded {len(state_data['cookies'])} cookies from storage_state.json into Playwright context.")
+                    except Exception as e:
+                        self.log(f"Notice loading storage_state.json: {e}")
+
                 if clearance_cookies:
                     formatted_cookies = []
                     for c in clearance_cookies:
@@ -164,6 +263,10 @@ class ScraperJob:
 
             # 1. On Auth0 / SSO domain, check login inputs directly (never authenticated)
             if "auth0.com" in url_lower or "bhloginsso" in url_lower or "login.brighthorizons" in url_lower:
+                mfa_inp = page.locator("input[name='code'], input[id='code']")
+                if "mfa" in url_lower or (mfa_inp.count() > 0 and mfa_inp.first.is_visible()):
+                    return "auth0_mfa"
+
                 pwd_inp = page.locator("input[name='password']:not(.hide), input[id='password']")
                 if pwd_inp.count() > 0 and pwd_inp.first.is_visible():
                     return "auth0_password"
@@ -188,11 +291,20 @@ class ScraperJob:
 
         return "unknown"
 
-    def perform_login(self, page: Page):
-        """Ultra-robust headless login handler for Bright Horizons portal & Auth0 SSO, resilient to slow page loads."""
-        self.log("Navigating to familyinfocenter.brighthorizons.com/home...")
-        page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
-        page.wait_for_timeout(2000)
+    def wait_for_manual_step(self, step_name: str, step_idx: int, update_cb: Optional[Callable[[str, int], None]] = None):
+        """Pauses execution until user clicks Next in UI (10 min timeout)."""
+        if update_cb:
+            update_cb(step_name, step_idx)
+        self._step_event.clear()
+        self.log(f"Paused at step: '{step_name}'. Waiting for user to click Next in UI...")
+        self._step_event.wait(timeout=600)
+
+    def perform_login(self, page: Page, update_progress_cb: Optional[Callable[[str, int], None]] = None):
+        """Ultra-robust login handler following the exact Bright Horizons & Auth0 SSO authentication sequence."""
+        self._active_page = page
+        self.log("Navigating to familyinfocenter.brighthorizons.com/okta/login...")
+        page.goto("https://familyinfocenter.brighthorizons.com/okta/login", wait_until="domcontentloaded")
+        page.wait_for_timeout(2500)
         
         state = self.detect_page_state(page, max_wait_sec=35)
         self.log(f"Detected page state: '{state}' (URL: {page.url})")
@@ -201,8 +313,10 @@ class ScraperJob:
             self.log("Already authenticated via active browser session!")
             return
 
+        # Step 1: Wait for and click Landing Page "Log In" button
         if state == "landing_login_btn":
             self.log("Clicking portal Log In button...")
+            if update_progress_cb: update_progress_cb("Clicking portal Log In button...", 2)
             btn = page.locator("button:has-text('Log In'), a:has-text('Log In'), button:has-text('Sign In'), a:has-text('Sign In')").first
             btn.click()
             page.wait_for_load_state("domcontentloaded")
@@ -210,43 +324,127 @@ class ScraperJob:
             self.log(f"Post-click page state: '{state}' (URL: {page.url})")
 
         if state in ["auth0_username", "auth0_password"]:
-            self.log("Auth0 SSO form detected. Filling email...")
+            self.log("Auth0 SSO login form loaded.")
             
-            # Dismiss alert banner if present
-            close_btn = page.locator("button.close-banner, button:has-text('×'), button[aria-label='Close']").first
-            if close_btn.count() > 0 and close_btn.is_visible():
-                try: close_btn.click()
-                except Exception: pass
-                
             if state == "auth0_username":
                 username_inp = page.locator("input[name='username'], input[id='username'], input[type='email']").first
                 username_inp.wait_for(state="visible", timeout=25000)
-                username_inp.click()
-                username_inp.press_sequentially(self.email, delay=25)
                 
-                cont_btn = page.locator("button[type='submit']:not(.ulp-hidden-form-submit-button), button._button-login-id").first
+                # Step 2: Wait for Cloudflare Turnstile verification ("Success!" / "Verify you are human")
+                self.log("Waiting for Cloudflare Turnstile verification...")
+                if update_progress_cb: update_progress_cb("Waiting for security check...", 2)
+                
+                turnstile_verified = False
+                for sec in range(25):
+                    body_text = page.locator("body").inner_text()
+                    body_lower = body_text.lower()
+                    
+                    if "success!" in body_lower or "success" in body_lower:
+                        self.log(f"Cloudflare Turnstile auto-verified (Success!) after {sec+1} seconds.")
+                        turnstile_verified = True
+                        break
+                    elif "verify you are human" in body_lower or "verify you are a human" in body_lower:
+                        self.log(f"Turnstile requires click (sec {sec+1}). Solved via frame click...")
+                        turnstile_iframe = page.locator("iframe[src*='challenges.cloudflare.com']").first
+                        if turnstile_iframe.count() > 0 and turnstile_iframe.is_visible():
+                            box = turnstile_iframe.bounding_box()
+                            if box:
+                                page.mouse.click(box['x'] + 30, box['y'] + (box['height'] / 2))
+                                page.wait_for_timeout(3000)
+                    elif "verifying" in body_lower:
+                        pass
+                        
+                    page.wait_for_timeout(1000)
+
+                # Optional manual step pause before entering email if manual_step_mode is enabled
+                if self._manual_step_mode:
+                    self.wait_for_manual_step("Turnstile check complete. Click Next to type email.", 2, update_progress_cb)
+
+                # Step 3: Type email address with realistic human keystroke timing and press Continue
+                self.log("Typing email address into SSO username input...")
+                if update_progress_cb: update_progress_cb("Typing email address...", 2)
+                
+                self.human_type(page, username_inp, self.email)
+                page.wait_for_timeout(1000)
+                
+                cont_btn = page.locator("button._button-login-id, button[type='submit']:not(.ulp-hidden-form-submit-button), button[name='action'], button:has-text('Continue')").first
+                self.log("Clicking Continue button...")
                 if cont_btn.count() > 0 and cont_btn.is_visible():
                     cont_btn.click(force=True)
                 else:
                     username_inp.press("Enter")
                     
-                page.wait_for_timeout(2000)
-                
+                page.wait_for_timeout(3500)
+
+            # Step 4: Type password with realistic human keystroke timing and press Continue
             pwd_inp = page.locator("input[name='password']:not(.hide), input[id='password']").first
             pwd_inp.wait_for(state="visible", timeout=25000)
-            self.log("Filling password...")
-            pwd_inp.click()
-            pwd_inp.press_sequentially(self.password, delay=25)
             
-            login_btn = page.locator("button[type='submit']:not(.ulp-hidden-form-submit-button), button._button-login-id").first
+            if self._manual_step_mode:
+                self.wait_for_manual_step("Password field visible. Click Next to submit password.", 2, update_progress_cb)
+
+            self.log("Filling password...")
+            if update_progress_cb: update_progress_cb("Submitting password...", 2)
+            self.human_type(page, pwd_inp, self.password)
+            page.wait_for_timeout(500)
+            
+            login_btn = page.locator("button[type='submit']:not(.ulp-hidden-form-submit-button), button[name='action'], button:has-text('Log In'), button:has-text('Sign In'), button:has-text('Continue')").first
             if login_btn.count() > 0 and login_btn.is_visible():
                 login_btn.click(force=True)
             else:
                 pwd_inp.press("Enter")
                 
-            self.log("Waiting for post-login redirection to portal...")
+            self.log("Waiting for post-login redirection or MFA challenge...")
+            page.wait_for_timeout(3500)
+            
+            # Step 5: Email Verification Code (MFA) & "Remember this device for 30 days"
+            state = self.detect_page_state(page, max_wait_sec=10)
+            mfa_inp_check = page.locator("input[name='code'], input[id='code']")
+            body_text = page.locator("body").inner_text()
+            if "Verify your identity" in body_text or state == "auth0_mfa" or "mfa" in page.url.lower() or (mfa_inp_check.count() > 0 and mfa_inp_check.first.is_visible()):
+                self.log("Auth0 MFA Email Verification required!")
+                
+                # Automatically select "Remember this device for 30 days" checkbox
+                remember_chk = page.locator("input[type='checkbox'], label:has-text('Remember')").first
+                if remember_chk.count() > 0 and remember_chk.is_visible():
+                    try:
+                        self.log("Selecting 'Remember this device for 30 days'...")
+                        remember_chk.click(force=True)
+                    except Exception as e:
+                        self.log(f"Remember checkbox notice: {e}")
+
+                self.status["state"] = "mfa_required"
+                self.status["current_step"] = "Waiting for Email Verification Code"
+                if update_progress_cb: update_progress_cb("Email verification code required", 2)
+                
+                self._mfa_event.clear()
+                got_code = self._mfa_event.wait(timeout=120)
+                if not got_code or not self._mfa_code:
+                    raise Exception("MFA verification timed out after 120 seconds.")
+                
+                code_to_submit = self._mfa_code
+                self._mfa_code = None # Overwrite and clear immediately from volatile memory!
+                
+                self.log("Submitting MFA code to Auth0 with realistic typing...")
+                if update_progress_cb: update_progress_cb("Submitting verification code...", 2)
+                mfa_inp = page.locator("input[name='code'], input[id='code'], input[type='text']").first
+                mfa_inp.wait_for(state="visible", timeout=10000)
+                self.human_type(page, mfa_inp, code_to_submit)
+                page.wait_for_timeout(500)
+                
+                submit_mfa_btn = page.locator("button[type='submit']:not(.ulp-hidden-form-submit-button), button[name='action'], button:has-text('Continue'), button:has-text('Verify')").first
+                if submit_mfa_btn.count() > 0 and submit_mfa_btn.is_visible():
+                    submit_mfa_btn.click(force=True)
+                else:
+                    mfa_inp.press("Enter")
+                    
+                page.wait_for_timeout(5000)
+                self.status["state"] = "running"
+                
+            # Step 6: Verify portal home page load & child profiles ("Byron")
+            self.log("Waiting for post-login redirection to portal home...")
             try:
-                page.wait_for_selector("span:has-text('Actions')", timeout=35000)
+                page.wait_for_selector("span:has-text('Actions'), h1:has-text('Byron')", timeout=35000)
             except Exception:
                 pass
             page.wait_for_timeout(2000)
@@ -259,21 +457,118 @@ class ScraperJob:
                 
             self.log(f"Authenticated state verified! Current URL: {page.url}")
 
+    def verify_imported_session(self, update_progress_cb: Optional[Callable[[str, int], None]] = None) -> List[Dict[str, str]]:
+        """
+        Verifies an imported session by launching Playwright with storage_state.json,
+        streaming horizontal desktop JPEGs via self.latest_preview_b64, and dynamically
+        waiting up to 180 seconds (3 minutes) for portal DOM elements to load.
+        """
+        self.status["state"] = "running"
+        self.status["current_step"] = "Connecting to Bright Horizons portal"
+        self.log("Verifying imported session authentication...")
+        
+        user_data_dir = self.tenant_storage.user_data_dir
+        state_file = os.path.join(user_data_dir, "storage_state.json")
+        
+        if not os.path.exists(state_file):
+            raise Exception("No session state file found to verify.")
+            
+        ensure_xvfb_display(1280, 720)
+        
+        with sync_playwright() as p:
+            args = [
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--window-size=1280,720"
+            ]
+            
+            context_kwargs = {
+                "args": args,
+                "ignore_default_args": ["--enable-automation"],
+                "headless": False,
+                "viewport": {"width": 1280, "height": 720}
+            }
+            
+            try:
+                context = p.chromium.launch_persistent_context(user_data_dir, channel="chrome", **context_kwargs)
+            except Exception:
+                context = p.chromium.launch_persistent_context(user_data_dir, **context_kwargs)
+                
+            try:
+                with open(state_file, "r") as sf:
+                    state_data = json.load(sf)
+                if state_data.get("cookies"):
+                    context.add_cookies(state_data["cookies"])
+            except Exception as e:
+                self.log(f"Notice loading cookies: {e}")
+                
+            page = context.new_page()
+            self._active_page = page
+            
+            self.log("Navigating to https://familyinfocenter.brighthorizons.com/home...")
+            page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
+            
+            self.latest_preview_b64 = capture_compressed_b64_frame(page, 1280, 720)
+            
+            start_time = time.time()
+            max_timeout = 180 # 3 minutes total timeout
+            authenticated = False
+            children = []
+            
+            while time.time() - start_time < max_timeout:
+                self.latest_preview_b64 = capture_compressed_b64_frame(page, 1280, 720) or self.latest_preview_b64
+                
+                try:
+                    current_url = page.url
+                    
+                    # Check for unauthenticated redirect to login
+                    if "okta/login" in current_url or "auth0" in current_url:
+                        try:
+                            body = page.locator("body").inner_text()
+                            if "Log In" in body or "Sign In" in body:
+                                context.close()
+                                self._active_page = None
+                                raise Exception("Session expired or redirected to login page.")
+                        except Exception as e:
+                            if "Session expired" in str(e): raise e
+                            
+                    # Check for portal DOM elements (Actions spans or child profile cards)
+                    actions_spans = page.locator("span", has_text="Actions")
+                    if actions_spans.count() > 0:
+                        authenticated = True
+                        break
+                except Exception as err:
+                    if "Session expired" in str(err):
+                        raise err
+                    # Execution context destroyed while page is navigating; safely retry next tick
+                    pass
+                    
+                time.sleep(1.0)
+                
+            if not authenticated:
+                context.close()
+                self._active_page = None
+                raise Exception("Portal load timed out after 180 seconds. Please check session freshness.")
+                
+            self.log("Authenticated portal page verified! Discovering enrolled children...")
+            children = self.discover_children(page, context)
+            
+            context.close()
+            self._active_page = None
+            
+            return children
+
     def verify_credentials(self, progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None) -> List[Dict[str, str]]:
         """
-        Standalone pre-verification helper with progress callbacks and live Playwright screenshot capture every 5s.
+        Standalone pre-verification helper with progress callbacks and live Playwright screenshot capture.
         Validates credentials with Auth0 and auto-discovers children.
-        Raises Exception if credentials are invalid or no children found.
         """
-        self._last_screenshot_time = 0.0
-
-        def update_progress(step: str, step_index: int, page: Optional[Page] = None, force_shot: bool = False):
-            now = time.time()
+        def update_progress(step: str, step_index: int, page: Optional[Page] = None, force_shot: bool = True):
             shot = None
-            if page and (force_shot or (now - self._last_screenshot_time >= 5.0)):
+            if page:
                 try:
-                    shot = capture_b64_screenshot(page)
-                    self._last_screenshot_time = now
+                    shot = capture_compressed_b64_frame(page)
                 except Exception:
                     pass
 
@@ -285,32 +580,35 @@ class ScraperJob:
                     "url": getattr(self, "_current_url", "https://familyinfocenter.brighthorizons.com/home")
                 })
 
-        def smart_wait(page: Optional[Page], duration_sec: float, step: str, step_index: int):
-            start = time.time()
-            while time.time() - start < duration_sec:
-                time.sleep(1.0)
-                now = time.time()
-                if page and (now - self._last_screenshot_time >= 5.0):
-                    update_progress(step, step_index, page=page, force_shot=True)
-
         self.log("Starting credentials pre-verification check...")
         update_progress("Bypassing Cloudflare turnstile protection via FlareSolverr...", 1, None, force_shot=False)
         
         user_data_dir = self.tenant_storage.user_data_dir
-        clearance_cookies = self.solve_cloudflare_flaresolverr("https://familyinfocenter.brighthorizons.com/home")
+        clean_user_data_locks(user_data_dir)
+        clearance_cookies, solver_ua = self.solve_cloudflare_flaresolverr("https://familyinfocenter.brighthorizons.com/home")
         
+        ensure_xvfb_display()
+        clean_user_data_locks(user_data_dir)
         with sync_playwright() as p:
             args = [
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
-                "--disable-dev-shm-usage"
+                "--disable-dev-shm-usage",
+                "--window-size=1280,720"
             ]
+            context_kwargs = {
+                "args": args,
+                "ignore_default_args": ["--enable-automation"],
+                "headless": False
+            }
+            if solver_ua:
+                context_kwargs["user_agent"] = solver_ua
+            else:
+                context_kwargs["user_agent"] = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+                
             context: BrowserContext = p.chromium.launch_persistent_context(
                 user_data_dir,
-                headless=True,
-                args=args,
-                ignore_default_args=["--enable-automation"],
-                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+                **context_kwargs
             )
             
             if clearance_cookies:
@@ -333,22 +631,16 @@ class ScraperJob:
                 self.log(f"Stealth application notice: {e}")
             
             try:
-                update_progress("Navigating to Bright Horizons Auth0 portal...", 2, page=page, force_shot=True)
-                smart_wait(page, 15, "Navigating to Bright Horizons Auth0 portal...", 2)
-                
-                # Step 1: Perform login
                 self.log("Navigating to portal and authenticating credentials...")
-                self._current_url = "https://familyinfocenter.brighthorizons.com/home"
+                self._current_url = "https://familyinfocenter.brighthorizons.com/okta/login"
                 
-                page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
+                page.goto("https://familyinfocenter.brighthorizons.com/okta/login", wait_until="domcontentloaded")
                 page.wait_for_timeout(2000)
                 update_progress("Authenticating with Bright Horizons SSO...", 2, page=page, force_shot=True)
-                smart_wait(page, 15, "Authenticating with Bright Horizons SSO...", 2)
                 
-                self.perform_login(page)
+                self.perform_login(page, update_progress_cb=lambda s, idx: update_progress(s, idx, page=page, force_shot=True))
                 self._current_url = page.url
                 update_progress("Authentication verified! Discovering enrolled children...", 3, page=page, force_shot=True)
-                smart_wait(page, 15, "Authentication verified! Discovering enrolled children...", 3)
                 
                 # Step 2: Auto-discover children
                 children = self.discover_children(page, context)
@@ -360,13 +652,15 @@ class ScraperJob:
                     update_progress("Verification failed: No child profiles found.", 3, page=page, force_shot=True)
                     raise Exception("Authentication succeeded, but no active child profiles were discovered for this account.")
                     
-                update_progress("Verification complete!", 4, page=page, force_shot=True)
-                smart_wait(page, 15, "Verification complete!", 4)
+                update_progress("Verification complete!", 3, page=page, force_shot=True)
                 return children
 
             except Exception as e:
                 update_progress(f"Verification error: {e}", 3, page=page, force_shot=True)
                 raise e
+            finally:
+                try: context.close()
+                except Exception: pass
 
     def discover_children(self, page: Page, context: BrowserContext) -> List[Dict[str, str]]:
         """Discovers active children and their dependent_ids following Angular CDK rules in .agents/AGENTS.md."""

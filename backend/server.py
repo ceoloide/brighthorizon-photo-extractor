@@ -6,7 +6,8 @@ import json
 import asyncio
 import threading
 from typing import Dict, Any, Optional
-from fastapi import FastAPI, Depends, HTTPException, Header, Request, status, Query
+from urllib.parse import quote
+from fastapi import FastAPI, Depends, HTTPException, Header, Request, status, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,6 +33,27 @@ _active_jobs: Dict[str, ScraperJob] = {}
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+class MfaRequest(BaseModel):
+    email: str
+    code: str
+
+class InteractPreviewRequest(BaseModel):
+    email: str
+    x_percent: float
+    y_percent: float
+
+class NextStepRequest(BaseModel):
+    email: str
+
+class ImportCookiesRequest(BaseModel):
+    email: str
+    cookies: str
+    url: Optional[str] = None
+
+class ImportSessionRequest(BaseModel):
+    email: str
+    payload: Dict[str, Any]
 
 class ExtractionRequest(BaseModel):
     sync_mode: str = "incremental" # "incremental" or "full"
@@ -75,10 +97,15 @@ def _start_verification_thread(email: str, password: str, tenant_storage: Tenant
     
     def run_verification():
         job = ScraperJob(tenant_storage, password, {})
+        state["job"] = job
         def on_progress(p):
             state["step"] = p.get("step", "")
             state["step_index"] = p.get("step_index", 1)
             state["timestamp"] = time.time()
+            if job.status.get("state") == "mfa_required":
+                state["status"] = "mfa_required"
+            elif state.get("status") == "mfa_required" and job.status.get("state") == "running":
+                state["status"] = "running"
             if p.get("screenshot"):
                 state["screenshot"] = p.get("screenshot")
                 
@@ -102,9 +129,7 @@ def _start_verification_thread(email: str, password: str, tenant_storage: Tenant
             state["timestamp"] = time.time()
         finally:
             def schedule_cleanup():
-                time.sleep(45)
-                if tenant_id in _active_verifications:
-                    _active_verifications[tenant_id]["screenshot"] = None
+                time.sleep(300) # Retain verification session state & live preview screenshot for 5 minutes
             threading.Thread(target=schedule_cleanup, daemon=True).start()
             
     t = threading.Thread(target=run_verification, daemon=True)
@@ -131,16 +156,16 @@ async def verify_stream(email: str = Query(...), password: str = Query(...)):
             if not state:
                 break
             
-            payload = json.dumps(state)
+            clean_state = {k: v for k, v in state.items() if k != "job"}
+            payload = json.dumps(clean_state)
             yield f"data: {payload}\n\n"
             
             if state.get("status") in ["success", "failed"]:
-                # Yield final state once and break
                 await asyncio.sleep(0.5)
-                yield f"data: {json.dumps(state)}\n\n"
+                yield f"data: {json.dumps(clean_state)}\n\n"
                 break
                 
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.5)
 
     return StreamingResponse(
         event_generator(),
@@ -168,43 +193,228 @@ def verify_progress(req: LoginRequest):
         
     return JSONResponse(content=current_state)
 
-@app.post("/api/auth/login")
-def login(req: LoginRequest):
+_mfa_attempts: Dict[str, int] = {}
+
+@app.post("/api/auth/submit-mfa-code")
+def submit_mfa_code(req: MfaRequest):
     email = req.email.strip().lower()
-    if not email or not req.password:
-        raise HTTPException(status_code=400, detail="Email and password are required")
+    code = req.code.strip()
+    
+    if not code.isdigit() or len(code) != 6:
+        raise HTTPException(status_code=400, detail="Invalid 6-digit verification code format.")
         
     tenant_storage = TenantStorage(email)
+    tenant_id = tenant_storage.tenant_id
     
-    # Pre-verify credentials and auto-discover children via headless Playwright
-    job = ScraperJob(tenant_storage, req.password, {})
-    try:
-        children = job.verify_credentials()
-    except Exception as e:
-        # Do NOT save invalid credentials
-        raise HTTPException(status_code=401, detail=str(e))
+    verification = _active_verifications.get(tenant_id)
+    job = None
+    if verification and "job" in verification:
+        job = verification["job"]
+    elif tenant_id in _active_jobs:
+        job = _active_jobs[tenant_id]
         
+    if not job:
+        raise HTTPException(status_code=404, detail="No active login verification session found for this email.")
+        
+    attempts = _mfa_attempts.get(tenant_id, 0)
+    if attempts >= 3:
+        raise HTTPException(status_code=429, detail="Too many failed MFA verification attempts. Please restart login.")
+        
+    _mfa_attempts[tenant_id] = attempts + 1
+    success = job.submit_mfa_code(code)
+    if not success:
+        raise HTTPException(status_code=400, detail="Failed to submit MFA verification code.")
+        
+    _mfa_attempts.pop(tenant_id, None)
+    return {"status": "success", "message": "Verification code received. Resuming authentication..."}
+
+@app.post("/api/auth/interact-preview")
+def interact_preview(req: InteractPreviewRequest):
+    email = req.email.strip().lower()
+    tenant_storage = TenantStorage(email)
+    tenant_id = tenant_storage.tenant_id
+    
+    verification = _active_verifications.get(tenant_id)
+    job = None
+    if verification and "job" in verification:
+        job = verification["job"]
+    elif tenant_id in _active_jobs:
+        job = _active_jobs[tenant_id]
+        
+    if not job:
+        raise HTTPException(status_code=404, detail="No active browser session found for interactive click.")
+        
+    job.click_preview(req.x_percent, req.y_percent)
+    return {"status": "success", "message": f"Click replicated at ({int(req.x_percent*100)}%, {int(req.y_percent*100)}%)"}
+
+@app.post("/api/auth/next-step")
+def next_step(req: NextStepRequest):
+    email = req.email.strip().lower()
+    tenant_storage = TenantStorage(email)
+    tenant_id = tenant_storage.tenant_id
+    
+    verification = _active_verifications.get(tenant_id)
+    job = None
+    if verification and "job" in verification:
+        job = verification["job"]
+    elif tenant_id in _active_jobs:
+        job = _active_jobs[tenant_id]
+        
+    if not job:
+        raise HTTPException(status_code=404, detail="No active session found.")
+        
+    job.advance_step()
+    return {"status": "success", "message": "Advanced to next step."}
+
+@app.post("/api/auth/import-cookies")
+def import_cookies(req: ImportCookiesRequest):
+    email = req.email.strip().lower()
+    if not email or not req.cookies:
+        raise HTTPException(status_code=400, detail="Email and cookies string are required.")
+    
+    tenant_storage = TenantStorage(email)
+    cookie_str = req.cookies.strip()
+    
+    formatted_cookies = []
+    for pair in cookie_str.split(";"):
+        if "=" in pair:
+            k, v = pair.strip().split("=", 1)
+            formatted_cookies.append({
+                "name": k.strip(),
+                "value": v.strip(),
+                "domain": ".brighthorizons.com",
+                "path": "/"
+            })
+            
+    if not formatted_cookies:
+        raise HTTPException(status_code=400, detail="No valid cookies parsed from input string.")
+        
+    user_data_dir = tenant_storage.user_data_dir
+    os.makedirs(user_data_dir, exist_ok=True)
+    state_file = os.path.join(user_data_dir, "storage_state.json")
+    
+    state_data = {
+        "cookies": formatted_cookies,
+        "origins": []
+    }
+    with open(state_file, "w") as f:
+        json.dump(state_data, f)
+        
+    return {"status": "success", "message": f"Successfully imported {len(formatted_cookies)} cookies for {email}!"}
+
+@app.post("/api/auth/import-session")
+def import_session(req: ImportSessionRequest, response: Response):
+    email = req.email.strip().lower()
+    if not email or not req.payload:
+        raise HTTPException(status_code=400, detail="Email and session payload are required.")
+        
+    tenant_storage = TenantStorage(email)
+    payload = req.payload
+    
+    formatted_cookies = []
+    cookie_str = payload.get("cookies", "")
+    if isinstance(cookie_str, str) and cookie_str.strip():
+        for pair in cookie_str.strip().split(";"):
+            if "=" in pair:
+                k, v = pair.strip().split("=", 1)
+                formatted_cookies.append({
+                    "name": k.strip(),
+                    "value": v.strip(),
+                    "domain": ".brighthorizons.com",
+                    "path": "/"
+                })
+                
+    origins = []
+    storage_str = payload.get("storage", "")
+    if storage_str:
+        try:
+            storage_dict = json.loads(storage_str) if isinstance(storage_str, str) else storage_str
+            ls_items = []
+            if isinstance(storage_dict, dict):
+                for k, v in storage_dict.items():
+                    ls_items.append({"name": k, "value": str(v)})
+            origins.append({
+                "origin": "https://familyinfocenter.brighthorizons.com",
+                "localStorage": ls_items
+            })
+        except Exception as e:
+            print("Error parsing local storage items:", e)
+            
+    if not formatted_cookies and not origins:
+        raise HTTPException(status_code=400, detail="No valid cookies or LocalStorage items parsed.")
+        
+    user_data_dir = tenant_storage.user_data_dir
+    os.makedirs(user_data_dir, exist_ok=True)
+    state_file = os.path.join(user_data_dir, "storage_state.json")
+    
+    state_data = {
+        "cookies": formatted_cookies,
+        "origins": origins
+    }
+    with open(state_file, "w") as f:
+        json.dump(state_data, f, indent=2)
+        
+    # Verify session authentication & discover children via Playwright
+    job = ScraperJob(tenant_storage, "imported_session", {})
+    tenant_id = tenant_storage.tenant_id
+    _active_verifications[tenant_id] = {"status": "running", "job": job}
+    _active_jobs[tenant_id] = job
+    
+    children = []
+    try:
+        children = job.verify_imported_session()
+    except Exception as e:
+        _active_verifications.pop(tenant_id, None)
+        _active_jobs.pop(tenant_id, None)
+        raise HTTPException(status_code=400, detail=f"Portal verification failed: {str(e)}")
+        
+    _active_verifications.pop(tenant_id, None)
+
     config = tenant_storage.load_config()
     config["email"] = email
-    config["password"] = req.password # Encrypted at rest via AES-256-GCM
-    config["children"] = children
+    if children:
+        config["children"] = children
     tenant_storage.save_config(config)
+
+    jwt_token = create_jwt_token(email, tenant_storage.tenant_id)
+    response.set_cookie(
+        key="bh_tenant_token",
+        value=jwt_token,
+        max_age=30 * 86400,
+        httponly=True,
+        samesite="lax",
+        secure=False
+    )
     
-    token = create_jwt_token(email, tenant_storage.tenant_id)
     return {
         "status": "success",
-        "token": token,
+        "message": f"Successfully imported session for {email}!",
+        "token": jwt_token,
         "email": email,
-        "tenant_id": tenant_storage.tenant_id,
-        "children": children
+        "children": config.get("children", [])
     }
 
 @app.get("/api/auth/me")
-def me(tenant: TenantStorage = Depends(get_current_tenant)):
+def get_me(request: Request, authorization: Optional[str] = Header(None)):
+    token = request.cookies.get("bh_tenant_token")
+    if not token and authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ")[1]
+        
+    if not token:
+        return {"authenticated": False}
+        
+    payload = verify_jwt_token(token)
+    if not payload or "email" not in payload:
+        return {"authenticated": False}
+        
+    tenant = TenantStorage(payload["email"])
     config = tenant.load_config()
+    
     return {
+        "authenticated": True,
         "email": tenant.email,
         "tenant_id": tenant.tenant_id,
+        "token": token,
         "children": config.get("children", []),
         "last_sync": config.get("last_sync")
     }

@@ -28,12 +28,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcairo2 \
     libasound2 \
     fonts-liberation \
+    xvfb \
+    xauth \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python requirements
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
-    fastapi uvicorn cryptography requests pydantic piexif playwright \
+    fastapi uvicorn cryptography requests pydantic piexif playwright playwright-stealth \
     && playwright install chromium
 
 # Copy application source & built frontend assets

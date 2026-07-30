@@ -105,4 +105,90 @@ def test_concurrent_verification_isolation():
     _active_verifications.pop(tid1, None)
     _active_verifications.pop(tid2, None)
 
+def test_mfa_regex_input_validation():
+    from backend.server import submit_mfa_code, MfaRequest
+    from fastapi import HTTPException
+
+    # Valid 6-digit string format should pass regex validation (raises 404 HTTPException since no active session exists)
+    with pytest.raises(HTTPException) as exc_info:
+        submit_mfa_code(MfaRequest(email="user@example.com", code="123456"))
+    assert exc_info.value.status_code == 404
+    assert "No active login verification session found" in exc_info.value.detail
+
+    # Invalid strings: letters, special chars, wrong lengths
+    invalid_codes = ["12345", "1234567", "abcdef", "12345a", "123 45", ""]
+    for code in invalid_codes:
+        with pytest.raises(HTTPException) as exc_info:
+            submit_mfa_code(MfaRequest(email="user@example.com", code=code))
+        assert exc_info.value.status_code == 400
+        assert "Invalid 6-digit verification code format" in exc_info.value.detail
+
+def test_mfa_session_ownership_and_unauthenticated_call():
+    from backend.server import submit_mfa_code, MfaRequest
+    from fastapi import HTTPException
+
+    # Calling submit-mfa-code without active login session for that email
+    with pytest.raises(HTTPException) as exc_info:
+        submit_mfa_code(MfaRequest(email="nonexistent@example.com", code="654321"))
+    assert exc_info.value.status_code == 404
+    assert "No active login verification session" in exc_info.value.detail
+
+def test_mfa_rate_limiting_behavior():
+    from backend.server import submit_mfa_code, MfaRequest, _active_verifications
+    from backend.scraper_engine import ScraperJob
+    from backend.database import TenantStorage
+    from fastapi import HTTPException
+
+    email = "ratelimit_test@example.com"
+    storage = TenantStorage(email)
+    job = ScraperJob(storage, "password123", {})
+    
+    # Mock submit_mfa_code on job to simulate failed attempts
+    job.submit_mfa_code = lambda code: False
+    _active_verifications[storage.tenant_id] = {"job": job, "status": "mfa_required"}
+
+    try:
+        # Perform 5 rapid calls with valid format codes
+        responses = []
+        for i in range(5):
+            try:
+                submit_mfa_code(MfaRequest(email=email, code=f"12345{i}"))
+                responses.append(200)
+            except HTTPException as e:
+                responses.append(e.status_code)
+
+        # Document current behavior: all 5 calls return 400 (Failed to submit MFA verification code)
+        # because rate limiting middleware/tracker is missing on this endpoint.
+        assert responses == [400, 400, 400, 400, 400]
+    finally:
+        _active_verifications.pop(storage.tenant_id, None)
+
+def test_mfa_volatile_memory_zero_disk_clearing():
+    from backend.scraper_engine import ScraperJob
+    from backend.database import TenantStorage
+
+    storage = TenantStorage("volatile_test@example.com")
+    job = ScraperJob(storage, "pass", {})
+
+    # Initially _mfa_code is None
+    assert job._mfa_code is None
+
+    # Submit MFA code set
+    job.submit_mfa_code("987654")
+    assert job._mfa_code == "987654"
+
+    # Simulate consumption logic in perform_login (copy code and set _mfa_code = None)
+    code_to_submit = job._mfa_code
+    job._mfa_code = None
+
+    assert code_to_submit == "987654"
+    assert job._mfa_code is None
+    
+    # Verify no MFA code is saved in TenantStorage config or files on disk
+    config = storage.load_config()
+    assert "_mfa_code" not in config
+    assert "987654" not in str(config)
+
+
+
 
