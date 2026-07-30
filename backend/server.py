@@ -5,6 +5,7 @@ import time
 import json
 import asyncio
 import threading
+from datetime import datetime
 from typing import Dict, Any, Optional
 from urllib.parse import quote
 from fastapi import FastAPI, Depends, HTTPException, Header, Request, status, Query, Response
@@ -341,6 +342,9 @@ def import_session(req: ImportSessionRequest, response: Response):
                 
     origins = []
     storage_str = payload.get("storage", "")
+    token_expired = False
+    expired_at_str = ""
+    
     if storage_str:
         try:
             storage_dict = json.loads(storage_str) if isinstance(storage_str, str) else storage_str
@@ -348,12 +352,30 @@ def import_session(req: ImportSessionRequest, response: Response):
             if isinstance(storage_dict, dict):
                 for k, v in storage_dict.items():
                     ls_items.append({"name": k, "value": str(v)})
-            origins.append({
-                "origin": "https://familyinfocenter.brighthorizons.com",
-                "localStorage": ls_items
-            })
+                    if "@@auth0spajs@@" in str(k):
+                        try:
+                            val_dict = json.loads(v) if isinstance(v, str) else v
+                            expires_at_ms = val_dict.get("expiresAt")
+                            if expires_at_ms and (expires_at_ms / 1000.0) < time.time():
+                                token_expired = True
+                                expired_at = datetime.fromtimestamp(expires_at_ms / 1000.0).strftime("%I:%M %p")
+                                expired_at_str = f"Token expired at {expired_at}"
+                        except Exception:
+                            pass
+
+            origins = [
+                {"origin": "https://familyinfocenter.brighthorizons.com", "localStorage": ls_items},
+                {"origin": "https://mybrightday.brighthorizons.com", "localStorage": ls_items},
+                {"origin": "https://bhloginsso.brighthorizons.com", "localStorage": ls_items}
+            ]
         except Exception as e:
             print("Error parsing local storage items:", e)
+            
+    if token_expired:
+        raise HTTPException(
+            status_code=400,
+            detail=f"The copied session tokens have expired ({expired_at_str}). Please refresh your active Bright Horizons portal browser tab (familyinfocenter.brighthorizons.com) to renew your session, then run the bookmarklet again to copy fresh tokens."
+        )
             
     if not formatted_cookies and not origins:
         raise HTTPException(status_code=400, detail="No valid cookies or LocalStorage items parsed.")
