@@ -16,10 +16,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
   const [targetChild, setTargetChild] = useState<string>('all');
   const [status, setStatus] = useState<any>({ state: 'idle', logs: [] });
   const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
-  const [showLogs, setShowLogs] = useState<boolean>(true);
+  const [showLogs, setShowLogs] = useState<boolean>(false);
   const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
   const [showConflictModal, setShowConflictModal] = useState<boolean>(false);
   const [deleting, setDeleting] = useState<boolean>(false);
+  const [cancelling, setCancelling] = useState<boolean>(false);
 
   const fetchStatus = async () => {
     try {
@@ -29,6 +30,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
       const data = await res.json();
       if (res.ok) {
         setStatus(data);
+        if (data.state !== 'running') {
+          setCancelling(false);
+        }
         if (data.state === 'completed') {
           setRefreshTrigger((prev) => prev + 1);
         }
@@ -80,6 +84,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
   };
 
   const handleCancelExtraction = async () => {
+    setCancelling(true);
     try {
       await fetch('/api/extraction/cancel', {
         method: 'POST',
@@ -118,10 +123,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
           </div>
           <div className="min-w-0">
             <h1 className="font-bold text-xs sm:text-sm text-slate-900 flex items-center gap-1.5 truncate">
-              <span className="truncate">Bright Horizons</span>
-              <span className="text-[10px] font-medium px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-full shrink-0">
-                Sync
-              </span>
+              <span className="truncate">Bright Horizon Photo Extractor</span>
             </h1>
             <p className="text-[10px] sm:text-[11px] text-slate-500 flex items-center gap-1 font-mono truncate">
               <Shield className="w-3 h-3 text-indigo-500 shrink-0" />
@@ -168,10 +170,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
               {status.state === 'running' ? (
                 <button
                   onClick={handleCancelExtraction}
-                  className="w-full sm:w-auto px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-xl transition flex items-center justify-center gap-1.5 shadow-sm"
+                  disabled={cancelling}
+                  className="w-full sm:w-auto px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-xl transition disabled:opacity-50 flex items-center justify-center gap-1.5 shadow-sm"
                 >
-                  <AlertCircle className="w-4 h-4" />
-                  <span>Cancel Job</span>
+                  {cancelling ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Cancelling Job...</span>
+                    </>
+                  ) : (
+                    <>
+                      <AlertCircle className="w-4 h-4" />
+                      <span>Cancel Job</span>
+                    </>
+                  )}
                 </button>
               ) : (
                 <button

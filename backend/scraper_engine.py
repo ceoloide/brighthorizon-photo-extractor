@@ -145,114 +145,111 @@ class ScraperJob:
             self.log(f"FlareSolverr request failed (will fall back to native Playwright stealth): {e}")
         return [], None
 
+    def cancel(self):
+        """Cancels the active scraper job cleanly."""
+        self._cancelled = True
+        self.status["state"] = "cancelled"
+        self.status["current_step"] = "Extraction cancelled by user"
+        self.log("Job cancellation requested by user.")
+        if hasattr(self, "_active_page") and self._active_page:
+            try:
+                self._active_page.context.close()
+            except Exception:
+                pass
+            self._active_page = None
+
     def run(self):
         self.status["state"] = "running"
-        self.status["current_step"] = "Starting headless browser"
-        self.log("Starting headless extraction job...")
+        self.status["current_step"] = "Starting browser session"
+        self.log("Starting background extraction job...")
         
         user_data_dir = self.tenant_storage.user_data_dir
+        state_file = os.path.join(user_data_dir, "storage_state.json")
         
         try:
-            # Query FlareSolverr for initial clearance cookies & User-Agent
-            clearance_cookies, solver_ua = self.solve_cloudflare_flaresolverr("https://familyinfocenter.brighthorizons.com/home")
-            
             ensure_xvfb_display()
             with sync_playwright() as p:
-                args = [
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--window-size=360,640",
-                    "--use-mobile-user-agent"
-                ]
+                browser = p.chromium.launch(
+                    headless=False,
+                    args=[
+                        "--disable-blink-features=AutomationControlled",
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage"
+                    ]
+                )
                 
                 context_kwargs = {
-                    "args": args,
-                    "ignore_default_args": ["--enable-automation"],
-                    "headless": False,
-                    "viewport": {"width": 360, "height": 640},
-                    "is_mobile": True,
-                    "has_touch": True,
-                    "device_scale_factor": 2,
-                    "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+                    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
                 }
-                
-                # Attempt using real Chrome browser channel if available
-                try:
-                    context: BrowserContext = p.chromium.launch_persistent_context(
-                        user_data_dir,
-                        channel="chrome",
-                        **context_kwargs
-                    )
-                except Exception:
-                    context: BrowserContext = p.chromium.launch_persistent_context(
-                        user_data_dir,
-                        **context_kwargs
-                    )
-                
-                state_file = os.path.join(user_data_dir, "storage_state.json")
                 if os.path.exists(state_file):
-                    try:
-                        with open(state_file, "r") as sf:
-                            state_data = json.load(sf)
-                        if state_data.get("cookies"):
-                            context.add_cookies(state_data["cookies"])
-                            self.log(f"Loaded {len(state_data['cookies'])} cookies from storage_state.json into Playwright context.")
-                    except Exception as e:
-                        self.log(f"Notice loading storage_state.json: {e}")
+                    context_kwargs["storage_state"] = state_file
+                    self.log("Loaded storage_state.json (cookies & localStorage) into extraction session.")
 
-                if clearance_cookies:
-                    formatted_cookies = []
-                    for c in clearance_cookies:
-                        formatted_cookies.append({
-                            "name": c["name"],
-                            "value": c["value"],
-                            "domain": c["domain"],
-                            "path": c.get("path", "/"),
-                            "secure": c.get("secure", False)
-                        })
-                    context.add_cookies(formatted_cookies)
-                
+                context: BrowserContext = browser.new_context(**context_kwargs)
                 page: Page = context.new_page()
+                self._active_page = page
                 
-                # Step 1: Check login & authenticate
-                self.status["current_step"] = "Authenticating with Bright Horizons"
-                self.perform_login(page)
+                # Check existing authentication state
+                self.status["current_step"] = "Verifying portal session"
+                self.log("Navigating to familyinfocenter.brighthorizons.com/home...")
+                page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
                 
-                # Step 2: Auto-discover children following Angular CDK rules (.agents/AGENTS.md)
+                state = self.detect_page_state(page, max_wait_sec=15)
+                if state == "authenticated":
+                    self.log("Authenticated portal page verified via existing saved session!")
+                else:
+                    self.log("Saved session expired or missing; performing portal authentication...")
+                    self.perform_login(page)
+                    
+                if self._cancelled:
+                    context.close()
+                    browser.close()
+                    self._active_page = None
+                    return
+
+                # Step 2: Auto-discover enrolled children
                 self.status["current_step"] = "Discovering enrolled children"
-                self.log("Discovering children profiles...")
                 children = self.discover_children(page, context)
-                
                 if not children:
-                    self.log("No children auto-discovered via portal. Checking existing config...")
                     config = self.tenant_storage.load_config()
                     children = config.get("children", [])
-                else:
-                    config = self.tenant_storage.load_config()
-                    config["children"] = children
-                    self.tenant_storage.save_config(config)
                     
                 if not children:
-                    raise Exception("No active children profiles found for this account.")
+                    raise Exception("No enrolled child profiles discovered for this account.")
                     
-                self.log(f"Discovered {len(children)} children: {[c['name'] for c in children]}")
-                
-                # Step 3: Extract photos/videos for children
+                # Save discovered children to config
+                config = self.tenant_storage.load_config()
+                config["children"] = children
+                self.tenant_storage.save_config(config)
+
+                # Step 3: Extract feed for children
                 self.status["current_step"] = "Extracting photos & videos"
                 for child in children:
+                    if self._cancelled: break
                     if self.target_child != "all" and child["name"].lower() != self.target_child.lower():
                         continue
                     self.extract_child_feed(page, context, child)
                     
-                self.status["state"] = "completed"
-                self.status["current_step"] = "Extraction finished successfully"
-                self.log("All extraction tasks completed successfully!")
+                if self._cancelled:
+                    self.status["state"] = "cancelled"
+                    self.status["current_step"] = "Extraction cancelled"
+                else:
+                    self.status["state"] = "completed"
+                    self.status["current_step"] = "Extraction finished successfully"
+                    self.log("All extraction tasks completed successfully!")
                 
+                context.close()
+                browser.close()
+                self._active_page = None
+
         except Exception as e:
-            self.status["state"] = "failed"
-            self.status["error"] = str(e)
-            self.log(f"Extraction failed: {e}")
+            if self._cancelled:
+                self.status["state"] = "cancelled"
+                self.status["current_step"] = "Extraction cancelled"
+            else:
+                self.status["state"] = "failed"
+                self.status["error"] = str(e)
+                self.log(f"Extraction failed: {e}")
 
     def detect_page_state(self, page: Page, max_wait_sec: int = 35) -> str:
         """
