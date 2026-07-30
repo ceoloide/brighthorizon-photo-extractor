@@ -42,7 +42,7 @@ export const DesktopSessionStepper: React.FC<DesktopSessionStepperProps> = ({ on
     };
   }, [submitting, email]);
 
-  const snippetCode = `(function(){var d={cookies:document.cookie,storage:JSON.stringify(localStorage)};if(window.copy){copy(JSON.stringify(d));alert("Session copied to clipboard!");}else{prompt("Copy Session Payload:",JSON.stringify(d));}})();`;
+  const snippetCode = `(function(){var d={cookies:document.cookie,storage:JSON.stringify(localStorage)};var s=JSON.stringify(d);if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(s).then(function(){alert("Session copied to clipboard!");}).catch(function(){prompt("Copy Session Payload:",s);});}else{var t=document.createElement("textarea");t.value=s;document.body.appendChild(t);t.select();document.execCommand("copy");document.body.removeChild(t);alert("Session copied to clipboard!");}})();`;
 
   const handleCopySnippet = () => {
     navigator.clipboard.writeText(snippetCode);
