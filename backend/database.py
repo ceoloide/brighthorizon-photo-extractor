@@ -36,6 +36,22 @@ class TenantStorage:
             except Exception as e:
                 print(f"[TenantStorage Error] Purging tenant directory {self.tenant_id} failed: {e}")
 
+    def clear_session(self):
+        """Clears the tenant's browser user_data session and state file when expired or upon sign-off."""
+        state_file = os.path.join(self.user_data_dir, "storage_state.json")
+        if os.path.exists(state_file):
+            try:
+                os.remove(state_file)
+                print(f"[TenantStorage] Deleted session state file for {self.tenant_id}")
+            except Exception as e:
+                print(f"[TenantStorage Error] Failed to delete session state file: {e}")
+        if os.path.exists(self.user_data_dir):
+            try:
+                shutil.rmtree(self.user_data_dir)
+                os.makedirs(self.user_data_dir, exist_ok=True)
+            except Exception as e:
+                print(f"[TenantStorage Error] Failed to purge user_data_dir: {e}")
+
     # --- Config Management ---
     def load_config(self) -> Dict[str, Any]:
         """Loads tenant configuration (encrypted at rest)."""

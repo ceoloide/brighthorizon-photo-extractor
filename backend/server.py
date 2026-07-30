@@ -395,6 +395,21 @@ def import_session(req: ImportSessionRequest, response: Response):
         "children": config.get("children", [])
     }
 
+@app.post("/api/auth/logout")
+def logout(response: Response, request: Request, authorization: Optional[str] = Header(None)):
+    token = request.cookies.get("bh_tenant_token")
+    if not token and authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ")[1]
+        
+    if token:
+        payload = verify_jwt_token(token)
+        if payload and "email" in payload:
+            tenant = TenantStorage(payload["email"])
+            tenant.clear_session()
+            
+    response.delete_cookie("bh_tenant_token")
+    return {"status": "success", "message": "Signed out successfully and cleared local device session."}
+
 @app.get("/api/auth/me")
 def get_me(request: Request, authorization: Optional[str] = Header(None)):
     token = request.cookies.get("bh_tenant_token")
@@ -409,6 +424,12 @@ def get_me(request: Request, authorization: Optional[str] = Header(None)):
         return {"authenticated": False}
         
     tenant = TenantStorage(payload["email"])
+    state_file = os.path.join(tenant.user_data_dir, "storage_state.json")
+    if not os.path.exists(state_file):
+        res = JSONResponse(content={"authenticated": False})
+        res.delete_cookie("bh_tenant_token")
+        return res
+
     config = tenant.load_config()
     
     return {

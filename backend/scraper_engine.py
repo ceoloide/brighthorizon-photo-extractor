@@ -162,8 +162,8 @@ class ScraperJob:
 
     def run(self):
         self.status["state"] = "running"
-        self.status["current_step"] = "Starting browser session"
-        self.log("Starting background extraction job...")
+        target_name_display = self.target_child.capitalize() if self.target_child != "all" else "All Enrolled Children"
+        self.log(f"Starting background extraction job for '{target_name_display}' (Sync Mode: {self.sync_mode.upper()})...")
         
         user_data_dir = self.tenant_storage.user_data_dir
         state_file = os.path.join(user_data_dir, "storage_state.json")
@@ -200,8 +200,12 @@ class ScraperJob:
                 if state == "authenticated":
                     self.log("Authenticated portal page verified via existing saved session!")
                 else:
-                    self.log("Saved session expired or missing; performing portal authentication...")
-                    self.perform_login(page)
+                    self.log("Saved session expired or missing; purging session state...")
+                    context.close()
+                    browser.close()
+                    self._active_page = None
+                    self.tenant_storage.clear_session()
+                    raise Exception("Session expired or invalid. Please re-authenticate and provide fresh session cookies.")
                     
                 if self._cancelled:
                     context.close()
@@ -210,26 +214,39 @@ class ScraperJob:
                     return
 
                 # Step 2: Auto-discover enrolled children
-                self.status["current_step"] = "Discovering enrolled children"
-                children = self.discover_children(page, context)
-                if not children:
-                    config = self.tenant_storage.load_config()
-                    children = config.get("children", [])
+                config = self.tenant_storage.load_config()
+                children = config.get("children", [])
+
+                if self.target_child != "all":
+                    matching = [c for c in children if c.get("name", "").lower() == self.target_child.lower()]
+                    if matching:
+                        children = matching
+                        self.log(f"Target child '{matching[0]['name']}' selected. Processing target child directly without rescanning other profiles.")
+                    else:
+                        self.status["current_step"] = f"Discovering profile for target child '{self.target_child.capitalize()}'"
+                        all_discovered = self.discover_children(page, context)
+                        matching = [c for c in all_discovered if c.get("name", "").lower() == self.target_child.lower()]
+                        children = matching if matching else all_discovered
+                        config["children"] = all_discovered
+                        self.tenant_storage.save_config(config)
+                else:
+                    if not children:
+                        self.status["current_step"] = "Discovering enrolled children"
+                        children = self.discover_children(page, context)
+                        config["children"] = children
+                        self.tenant_storage.save_config(config)
                     
                 if not children:
                     raise Exception("No enrolled child profiles discovered for this account.")
-                    
-                # Save discovered children to config
-                config = self.tenant_storage.load_config()
-                config["children"] = children
-                self.tenant_storage.save_config(config)
 
                 # Step 3: Extract feed for children
                 self.status["current_step"] = "Extracting photos & videos"
                 for child in children:
                     if self._cancelled: break
                     if self.target_child != "all" and child["name"].lower() != self.target_child.lower():
+                        self.log(f"Skipping '{child['name']}' (Target is '{self.target_child.capitalize()}').")
                         continue
+                    self.log(f"Starting feed extraction for child: '{child['name']}'...")
                     self.extract_child_feed(page, context, child)
                     
                 if self._cancelled:
