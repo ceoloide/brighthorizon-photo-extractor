@@ -228,7 +228,30 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
           )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 pt-1">
-            {/* Sync Mode Controls */}
+            {/* Target Child Selector (First) */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                Target Child
+              </label>
+              <select
+                value={targetChild}
+                onChange={(e) => setTargetChild(e.target.value)}
+                disabled={status.state === 'running'}
+                className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 sm:py-2 text-xs text-slate-800 focus:border-indigo-600 outline-none transition font-medium"
+              >
+                <option value="all">All Enrolled Children</option>
+                {childrenList && childrenList.map((c: any, i: number) => {
+                  const name = typeof c === 'string' ? c : c.name;
+                  return (
+                    <option key={i} value={name.toLowerCase()}>
+                      {name}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+
+            {/* Sync Mode Controls (Second) */}
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
@@ -254,7 +277,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
                   type="button"
                   onClick={() => setSyncMode('full')}
                   disabled={status.state === 'running'}
-                  title="Rescan all historical media and update existing entries."
+                  title="Rescan all historical media across all history for the selected child or all enrolled children."
                   className={`py-2 sm:py-1.5 rounded-lg transition ${
                     syncMode === 'full'
                       ? 'bg-white text-indigo-700 font-semibold border border-slate-200 shadow-sm'
@@ -279,12 +302,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
               </div>
               <p className="text-[10px] text-slate-400 italic">
                 {syncMode === 'incremental' && '• Resumes from last sync date, skipping existing downloads.'}
-                {syncMode === 'full' && '• Scans entire history for all enrolled children.'}
+                {syncMode === 'full' && '• Downloads all historical pictures for selected child/children.'}
                 {syncMode === 'custom' && '• Filter posts published on or after custom start date.'}
               </p>
             </div>
 
-            {/* Custom Date Picker (when Custom start is selected) */}
+            {/* Custom Start Date Picker (Third, when Custom is selected) */}
             {syncMode === 'custom' && (
               <div className="space-y-1.5">
                 <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
@@ -299,29 +322,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
                 />
               </div>
             )}
-
-            {/* Target Child Selector */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                Target Child
-              </label>
-              <select
-                value={targetChild}
-                onChange={(e) => setTargetChild(e.target.value)}
-                disabled={status.state === 'running'}
-                className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 sm:py-2 text-xs text-slate-800 focus:border-indigo-600 outline-none transition font-medium"
-              >
-                <option value="all">All Enrolled Children</option>
-                {childrenList && childrenList.map((c: any, i: number) => {
-                  const name = typeof c === 'string' ? c : c.name;
-                  return (
-                    <option key={i} value={name.toLowerCase()}>
-                      {name}
-                    </option>
-                  );
-                })}
-              </select>
-            </div>
           </div>
 
           {/* Status Alert & Progress Console */}

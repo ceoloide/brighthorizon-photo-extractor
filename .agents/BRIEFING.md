@@ -6,7 +6,7 @@ Orchestrate in-depth adversarial audit on job cancellation responsiveness, sessi
 ## 🔒 My Identity
 - Archetype: sentinel
 - Working directory: /home/antigravity/GitHub/brighthorizon-photo-extractor/.agents
-- Orchestrator: TBD
+- Orchestrator: c3a33e91-3516-43d2-b62a-4900e18faa53
 - Victory Auditor: to be spawned on victory claim
 
 ## 🔒 Key Constraints
