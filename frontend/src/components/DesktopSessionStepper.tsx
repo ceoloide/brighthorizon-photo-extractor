@@ -14,33 +14,6 @@ export const DesktopSessionStepper: React.FC<DesktopSessionStepperProps> = ({ on
   const [validationSuccess, setValidationSuccess] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [parsedPayload, setParsedPayload] = useState<any>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    let sse: EventSource | null = null;
-    if (submitting && email) {
-      const url = `/api/auth/verify-stream?email=${encodeURIComponent(email.trim().toLowerCase())}`;
-      sse = new EventSource(url);
-      sse.onmessage = (e) => {
-        if (e.data) {
-          try {
-            const data = JSON.parse(e.data);
-            if (data.preview_b64) {
-              setPreviewUrl(data.preview_b64);
-            }
-          } catch {}
-        }
-      };
-      sse.onerror = () => {
-        sse?.close();
-      };
-    } else {
-      setPreviewUrl(null);
-    }
-    return () => {
-      sse?.close();
-    };
-  }, [submitting, email]);
 
   const snippetCode = `javascript:(function(){var d={cookies:document.cookie,storage:JSON.stringify(localStorage)},s=JSON.stringify(d),o=document.getElementById("bh-session-overlay");if(o)o.remove();var b=document.createElement("div");b.id="bh-session-overlay";b.style.cssText="position:fixed;top:20px;right:20px;z-index:999999;width:420px;background:#1e293b;color:#fff;padding:16px;border-radius:12px;box-shadow:0 20px 25px -5px rgba(0,0,0,0.5);font-family:sans-serif;font-size:13px;";b.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;"><b style="color:#818cf8;">Bright Horizons Session Payload</b><button id="bh-close-btn" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:16px;">✕</button></div><p style="margin:0 0 10px 0;font-size:11px;color:#cbd5e1;">Click below to copy your full session payload:</p><textarea id="bh-ta-payload" style="width:100%;height:140px;background:#0f172a;color:#fde047;border:1px solid #334155;border-radius:6px;padding:8px;font-family:monospace;font-size:10px;resize:none;" readonly></textarea><button id="bh-copy-btn" style="width:100%;margin-top:10px;padding:8px;background:#4f46e5;color:#fff;border:none;border-radius:6px;font-weight:bold;cursor:pointer;">📋 Copy Session Payload</button>';document.body.appendChild(b);var t=document.getElementById("bh-ta-payload");t.value=s;t.select();document.getElementById("bh-close-btn").onclick=function(){b.remove();};document.getElementById("bh-copy-btn").onclick=function(){t.select();document.execCommand("copy");this.innerText="✓ Copied to Clipboard!";this.style.background="#10b981";};})();`;
 
@@ -116,25 +89,14 @@ export const DesktopSessionStepper: React.FC<DesktopSessionStepperProps> = ({ on
   if (submitting) {
     return (
       <div className="min-h-screen bg-slate-50 text-slate-800 flex items-center justify-center p-4 sm:p-6 font-sans">
-        <div className="max-w-2xl w-full bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 shadow-sm text-center space-y-6">
+        <div className="max-w-md w-full bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 shadow-sm text-center space-y-6">
           <div className="flex items-center justify-center space-x-3">
-            <div className="w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+            <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
             <h2 className="text-lg font-bold text-slate-900">Connecting Account...</h2>
           </div>
           <p className="text-xs text-slate-500 leading-relaxed">
             Authenticating session tokens with Bright Horizons portal and discovering enrolled children...
           </p>
-
-          <div className="relative bg-slate-950 rounded-xl overflow-hidden border border-slate-800 shadow-inner aspect-[16/9] max-w-xl mx-auto flex items-center justify-center">
-            {previewUrl ? (
-              <img src={previewUrl} alt="Portal Desktop Live Preview" className="w-full h-full object-contain" />
-            ) : (
-              <div className="flex flex-col items-center space-y-2 text-slate-400 p-8">
-                <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-                <span className="text-xs font-mono">Initializing live desktop viewport stream...</span>
-              </div>
-            )}
-          </div>
         </div>
       </div>
     );
