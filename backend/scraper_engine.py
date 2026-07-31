@@ -354,49 +354,83 @@ class ScraperJob:
 
     def solve_and_wait_turnstile(self, page: Page, max_wait_sec: int = 50, update_progress_cb: Optional[Callable[[str, int], None]] = None) -> bool:
         """
-        Passively monitors Cloudflare Turnstile automatic verification for up to max_wait_sec.
-        No frame clicks are sent—it purely observes until 'Success!' is detected or fails if 'Verify you are human' persists.
+        Monitors Cloudflare Turnstile automatic verification and handles interactive checkbox fallback.
+        Logs detailed DOM & iframe state without exposing credentials.
+        Fails strictly if Turnstile remains unsolved after max_wait_sec.
         """
-        self.log(f"Monitoring Cloudflare Turnstile automatic verification (up to {max_wait_sec}s)...")
+        self.log(f"[Turnstile] Monitoring Turnstile security check (timeout: {max_wait_sec}s)...")
         if update_progress_cb:
             update_progress_cb("Waiting for Cloudflare security check...", 2)
 
         start_t = time.time()
+        last_click_t = 0.0
+        last_log_t = 0.0
+
         while time.time() - start_t < max_wait_sec:
-            # Inspect overall page body & frame text for 'Success!' verification
-            full_text = ""
+            current_elapsed = int(time.time() - start_t)
+            
+            # 1. Gather text content from body and all frames safely
+            body_text = ""
             try:
-                full_text = page.locator("body").inner_text().lower()
+                body_text = page.locator("body").inner_text().lower()
             except Exception:
                 pass
 
-            frame_texts = ""
+            frame_sources = []
+            cf_frames = []
             for f in page.frames:
                 try:
-                    frame_texts += " " + f.locator("body").inner_text().lower()
+                    f_url = f.url
+                    f_text = f.locator("body").inner_text().lower()
+                    frame_sources.append(f_text)
+                    if "challenges.cloudflare.com" in f_url:
+                        cf_frames.append((f, f_text))
                 except Exception:
                     pass
 
-            combined = full_text + " " + frame_texts
+            combined = body_text + " " + " ".join(frame_sources)
             
+            # 2. Check for explicit Success verification
             if "success!" in combined or "success" in combined or "verified" in combined:
-                self.log(f"🎉 Cloudflare Turnstile automatically verified ('Success!') after {int(time.time() - start_t)}s!")
+                self.log(f"[Turnstile] 🎉 Successfully verified ('Success!') after {current_elapsed}s.")
                 return True
+
+            # 3. Check for 'Verify you are human' challenge frame
+            has_challenge = "verify you are human" in combined or "verify you are a human" in combined or len(cf_frames) > 0
+
+            # Log periodic status update every 5 seconds
+            if time.time() - last_log_t >= 5.0:
+                last_log_t = time.time()
+                self.log(f"[Turnstile] Status ({current_elapsed}s): cf_frames={len(cf_frames)}, challenge_present={has_challenge}, url={page.url}")
+
+            # 4. If challenge frame is present, attempt click if unverified for > 4s
+            if cf_frames and (time.time() - last_click_t > 4.0):
+                for cf_frame, f_text in cf_frames:
+                    self.log(f"[Turnstile] Attempting verification click on Cloudflare frame (URL: {cf_frame.url[:60]}...)...")
+                    try:
+                        cf_frame.click("body", position={"x": 30, "y": 30})
+                        last_click_t = time.time()
+                        page.wait_for_timeout(1500)
+                    except Exception as e:
+                        self.log(f"[Turnstile] Click note: {e}")
 
             page.wait_for_timeout(1000)
 
-        # Final check for failure state
-        final_text = ""
+        # 5. Post-timeout strict failure assessment
+        final_body = ""
         try:
-            final_text = page.locator("body").inner_text().lower()
+            final_body = page.locator("body").inner_text().lower()
         except Exception:
             pass
 
-        if "verify you are human" in final_text or "verify you are a human" in final_text:
-            self.log("Cloudflare Turnstile failed: 'Verify you are human' challenge was presented.")
-            raise Exception("Cloudflare Turnstile security verification failed ('Verify you are human' required).")
+        final_frames = " ".join([f.locator("body").inner_text().lower() for f in page.frames if "challenges.cloudflare.com" in f.url])
+        final_combined = final_body + " " + final_frames
 
-        self.log(f"Turnstile monitoring completed after {max_wait_sec}s. Proceeding...")
+        if "verify you are human" in final_combined or "verify you are a human" in final_combined or "challenges.cloudflare.com" in page.content():
+            self.log("[Turnstile] ❌ Verification failed: Cloudflare 'Verify you are human' challenge remained unsolved.")
+            raise Exception("Cloudflare Turnstile verification failed. Please try again.")
+
+        self.log(f"[Turnstile] Monitoring window ended after {max_wait_sec}s without explicit success signal.")
         return False
 
     def perform_login(self, page: Page, update_progress_cb: Optional[Callable[[str, int], None]] = None):
@@ -431,7 +465,8 @@ class ScraperJob:
                 username_inp.wait_for(state="visible", timeout=50000)
                 
                 # Step 2: Solve & confirm Cloudflare Turnstile verification FIRST
-                self.solve_and_wait_turnstile(page, max_wait_sec=50, update_progress_cb=update_progress_cb)
+                if not self.solve_and_wait_turnstile(page, max_wait_sec=50, update_progress_cb=update_progress_cb):
+                    raise Exception("Cloudflare Turnstile security verification failed.")
 
                 # Step 3: Type email address AFTER Turnstile verification succeeds
                 self.log("Cloudflare Turnstile verified! Typing email address into SSO username input...")
