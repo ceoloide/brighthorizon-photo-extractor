@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { MobileBlocked } from './components/MobileBlocked';
+import { LoginForm } from './components/LoginForm';
 import { DesktopSessionStepper } from './components/DesktopSessionStepper';
 import { Dashboard } from './components/Dashboard';
 
@@ -9,6 +10,7 @@ export const App: React.FC = () => {
   const [childrenList, setChildrenList] = useState<any[]>([]);
   const [checking, setChecking] = useState<boolean>(true);
   const [isMobile, setIsMobile] = useState<boolean>(false);
+  const [useManualStepper, setUseManualStepper] = useState<boolean>(false);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -85,8 +87,26 @@ export const App: React.FC = () => {
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
       {token && email ? (
         <Dashboard token={token} email={email} childrenList={childrenList} onLogout={handleLogout} />
+      ) : useManualStepper ? (
+        <div className="flex flex-col items-center">
+          <DesktopSessionStepper onSuccess={handleSessionSuccess} />
+          <button
+            onClick={() => setUseManualStepper(false)}
+            className="my-4 text-xs font-medium text-indigo-600 hover:text-indigo-700 underline"
+          >
+            ← Switch to Account Email & Password Login
+          </button>
+        </div>
       ) : (
-        <DesktopSessionStepper onSuccess={handleSessionSuccess} />
+        <div className="flex flex-col items-center">
+          <LoginForm onLoginSuccess={(validToken, data) => handleSessionSuccess(data?.email || '', data?.children, validToken)} />
+          <button
+            onClick={() => setUseManualStepper(true)}
+            className="-mt-12 mb-6 text-xs font-medium text-slate-500 hover:text-slate-700 underline"
+          >
+            Alternative: Connect via Desktop Browser Cookies
+          </button>
+        </div>
       )}
     </div>
   );
