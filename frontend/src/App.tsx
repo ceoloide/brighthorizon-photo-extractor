@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { MobileBlocked } from './components/MobileBlocked';
 import { LoginForm } from './components/LoginForm';
-import { DesktopSessionStepper } from './components/DesktopSessionStepper';
 import { Dashboard } from './components/Dashboard';
 
 export const App: React.FC = () => {
@@ -9,19 +7,8 @@ export const App: React.FC = () => {
   const [email, setEmail] = useState<string | null>(localStorage.getItem('bh_email'));
   const [childrenList, setChildrenList] = useState<any[]>([]);
   const [checking, setChecking] = useState<boolean>(true);
-  const [isMobile, setIsMobile] = useState<boolean>(false);
-  const [useManualStepper, setUseManualStepper] = useState<boolean>(false);
 
   useEffect(() => {
-    const checkMobile = () => {
-      const mobileUA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-      const smallScreen = window.innerWidth < 768;
-      setIsMobile(mobileUA || smallScreen);
-    };
-
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-
     const checkAuth = async () => {
       const storedToken = localStorage.getItem('bh_token');
       try {
@@ -47,7 +34,6 @@ export const App: React.FC = () => {
     };
 
     checkAuth();
-    return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
   const handleSessionSuccess = (userEmail: string, discoveredChildren?: any[], validToken?: string) => {
@@ -70,8 +56,6 @@ export const App: React.FC = () => {
     setChildrenList([]);
   };
 
-  // Mobile devices are now fully supported!
-
   if (checking) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center text-slate-500 gap-3">
@@ -85,26 +69,8 @@ export const App: React.FC = () => {
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
       {token && email ? (
         <Dashboard token={token} email={email} childrenList={childrenList} onLogout={handleLogout} />
-      ) : useManualStepper ? (
-        <div className="flex flex-col items-center">
-          <DesktopSessionStepper onSuccess={handleSessionSuccess} />
-          <button
-            onClick={() => setUseManualStepper(false)}
-            className="my-4 text-xs font-medium text-indigo-600 hover:text-indigo-700 underline"
-          >
-            ← Switch to Account Email & Password Login
-          </button>
-        </div>
       ) : (
-        <div className="flex flex-col items-center">
-          <LoginForm onLoginSuccess={(validToken, data) => handleSessionSuccess(data?.email || '', data?.children, validToken)} />
-          <button
-            onClick={() => setUseManualStepper(true)}
-            className="-mt-12 mb-6 text-xs font-medium text-slate-500 hover:text-slate-700 underline"
-          >
-            Alternative: Connect via Desktop Browser Cookies
-          </button>
-        </div>
+        <LoginForm onLoginSuccess={(validToken, data) => handleSessionSuccess(data?.email || '', data?.children, validToken)} />
       )}
     </div>
   );
