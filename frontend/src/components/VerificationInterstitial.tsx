@@ -108,18 +108,6 @@ export const VerificationInterstitial: React.FC<VerificationInterstitialProps> =
     }
   ];
 
-  const handleNextStep = async () => {
-    try {
-      await fetch('/api/auth/next-step', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email })
-      });
-    } catch (err) {
-      console.error('Failed to trigger next step:', err);
-    }
-  };
-
   return (
     <div className="min-h-screen flex flex-col justify-center items-center p-4 sm:p-6 bg-slate-50 font-sans">
       <div className="max-w-2xl w-full bg-white rounded-2xl p-5 sm:p-8 border border-slate-200 shadow-sm space-y-6">
@@ -164,17 +152,6 @@ export const VerificationInterstitial: React.FC<VerificationInterstitialProps> =
                   <p className="text-[11px] opacity-80 mt-0.5 leading-tight">{s.desc}</p>
                 </div>
 
-                {/* Step 2 Manual Next Step Button */}
-                {idx === 1 && isCurrent && (
-                  <button
-                    type="button"
-                    onClick={handleNextStep}
-                    className="mt-3 w-full py-1.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold rounded-lg transition flex items-center justify-center gap-1 shadow-sm"
-                  >
-                    <span>Next Step</span>
-                    <ChevronRight className="w-3.5 h-3.5" />
-                  </button>
-                )}
               </div>
             );
           })}

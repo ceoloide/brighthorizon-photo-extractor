@@ -39,9 +39,6 @@ class MfaRequest(BaseModel):
     email: str
     code: str
 
-class NextStepRequest(BaseModel):
-    email: str
-
 class ImportCookiesRequest(BaseModel):
     email: str
     cookies: str
@@ -248,25 +245,6 @@ def submit_mfa_code(req: MfaRequest):
         
     _mfa_attempts.pop(tenant_id, None)
     return {"status": "success", "message": "Verification code received. Resuming authentication..."}
-
-@app.post("/api/auth/next-step")
-def next_step(req: NextStepRequest):
-    email = req.email.strip().lower()
-    tenant_storage = TenantStorage(email)
-    tenant_id = tenant_storage.tenant_id
-    
-    verification = _active_verifications.get(tenant_id)
-    job = None
-    if verification and "job" in verification:
-        job = verification["job"]
-    elif tenant_id in _active_jobs:
-        job = _active_jobs[tenant_id]
-        
-    if not job:
-        raise HTTPException(status_code=404, detail="No active session found.")
-        
-    job.advance_step()
-    return {"status": "success", "message": "Advanced to next step."}
 
 @app.post("/api/auth/import-cookies")
 def import_cookies(req: ImportCookiesRequest):

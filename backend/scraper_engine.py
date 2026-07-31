@@ -391,72 +391,58 @@ class ScraperJob:
                 username_inp = page.locator("input[name='username'], input[id='username'], input[type='email']").first
                 username_inp.wait_for(state="visible", timeout=25000)
                 
-                # Step 2: Wait for Cloudflare Turnstile verification ("Success!" / "Verify you are human")
-                self.log("Waiting for Cloudflare Turnstile verification...")
-                if update_progress_cb: update_progress_cb("Waiting for security check...", 2)
-                
-                turnstile_verified = False
-                for sec in range(25):
-                    body_text = page.locator("body").inner_text()
-                    body_lower = body_text.lower()
-                    
-                    if "success!" in body_lower or "success" in body_lower:
-                        self.log(f"Cloudflare Turnstile auto-verified (Success!) after {sec+1} seconds.")
-                        turnstile_verified = True
-                        break
-                    elif "verify you are human" in body_lower or "verify you are a human" in body_lower:
-                        self.log(f"Turnstile requires click (sec {sec+1}). Solved via frame click...")
-                        turnstile_iframe = page.locator("iframe[src*='challenges.cloudflare.com']").first
-                        if turnstile_iframe.count() > 0 and turnstile_iframe.is_visible():
-                            box = turnstile_iframe.bounding_box()
-                            if box:
-                                page.mouse.click(box['x'] + 30, box['y'] + (box['height'] / 2))
-                                page.wait_for_timeout(3000)
-                    elif "verifying" in body_lower:
-                        pass
-                        
-                    page.wait_for_timeout(1000)
-
-                # Optional manual step pause before entering email if manual_step_mode is enabled
-                if self._manual_step_mode:
-                    self.wait_for_manual_step("Turnstile check complete. Click Next to type email.", 2, update_progress_cb)
-
-                # Step 3: Type email address with realistic human keystroke timing and press Continue
+                # Step 2: Type email address
                 self.log("Typing email address into SSO username input...")
                 if update_progress_cb: update_progress_cb("Typing email address...", 2)
                 
                 self.human_type(page, username_inp, self.email)
                 page.wait_for_timeout(1000)
-                
-                cont_btn = page.locator("button._button-login-id, button[type='submit']:not(.ulp-hidden-form-submit-button), button[name='action'], button:has-text('Continue')").first
+
+                # Solve Cloudflare Turnstile if frame present (container-verified frame click)
+                for frame in page.frames:
+                    if "challenges.cloudflare.com" in frame.url:
+                        self.log("Solving Cloudflare Turnstile challenge...")
+                        try:
+                            frame.click("body", position={"x": 30, "y": 30})
+                            page.wait_for_timeout(3000)
+                        except Exception as e:
+                            self.log(f"Turnstile note: {e}")
+
+                cont_btn = page.locator("button[data-action-button-primary='true'], button._button-login-id, button[type='submit']:not(.ulp-hidden-form-submit-button), button:has-text('Continue')").first
                 self.log("Clicking Continue button...")
                 if cont_btn.count() > 0 and cont_btn.is_visible():
                     cont_btn.click(force=True)
                 else:
                     username_inp.press("Enter")
                     
-                page.wait_for_timeout(3500)
+                page.wait_for_timeout(4000)
 
-            # Step 4: Type password with realistic human keystroke timing and press Continue
+            # Step 3: Type password & submit
             pwd_inp = page.locator("input[name='password']:not(.hide), input[id='password']").first
             pwd_inp.wait_for(state="visible", timeout=25000)
             
-            if self._manual_step_mode:
-                self.wait_for_manual_step("Password field visible. Click Next to submit password.", 2, update_progress_cb)
-
             self.log("Filling password...")
             if update_progress_cb: update_progress_cb("Submitting password...", 2)
             self.human_type(page, pwd_inp, self.password)
             page.wait_for_timeout(500)
+
+            # Solve Turnstile on password step if frame present
+            for frame in page.frames:
+                if "challenges.cloudflare.com" in frame.url:
+                    try:
+                        frame.click("body", position={"x": 30, "y": 30})
+                        page.wait_for_timeout(3000)
+                    except Exception:
+                        pass
             
-            login_btn = page.locator("button[type='submit']:not(.ulp-hidden-form-submit-button), button[name='action'], button:has-text('Log In'), button:has-text('Sign In'), button:has-text('Continue')").first
+            login_btn = page.locator("button[data-action-button-primary='true'], button[type='submit']:not(.ulp-hidden-form-submit-button), button:has-text('Log In'), button:has-text('Sign In')").first
             if login_btn.count() > 0 and login_btn.is_visible():
                 login_btn.click(force=True)
             else:
                 pwd_inp.press("Enter")
                 
             self.log("Waiting for post-login redirection or MFA challenge...")
-            page.wait_for_timeout(3500)
+            page.wait_for_timeout(4000)
             
             # Step 5: Email Verification Code (MFA) & "Remember this device for 30 days"
             state = self.detect_page_state(page, max_wait_sec=10)
