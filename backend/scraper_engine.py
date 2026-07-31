@@ -231,7 +231,6 @@ class ScraperJob:
                     
                 if self._cancelled:
                     context.close()
-                    browser.close()
                     self._active_page = None
                     return
 
@@ -282,7 +281,6 @@ class ScraperJob:
                     self.log("All extraction tasks completed successfully!")
                 
                 context.close()
-                browser.close()
                 self._active_page = None
 
         except Exception as e:
@@ -584,7 +582,6 @@ class ScraperJob:
                 ]
                 
             context.close()
-            browser.close()
             self._active_page = None
             
             return children
