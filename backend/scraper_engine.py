@@ -522,8 +522,7 @@ class ScraperJob:
                 self.log("Cloudflare Turnstile verified! Filling email address into SSO username input...")
                 if update_progress_cb: update_progress_cb("Filling email address...", 2)
                 
-                username_inp.click(force=True)
-                username_inp.fill(self.email)
+                page.fill("input[name='username'], input[id='username'], input[type='email']", self.email)
 
                 cont_btn = page.locator("button[data-action-button-primary='true'], button._button-login-id, button[type='submit']:not(.ulp-hidden-form-submit-button), button:has-text('Continue')").first
                 self.log("Clicking Continue button...")
@@ -549,8 +548,7 @@ class ScraperJob:
             
             self.log("Filling password...")
             if update_progress_cb: update_progress_cb("Submitting password...", 2)
-            pwd_inp.click(force=True)
-            pwd_inp.fill(self.password)
+            page.fill("input[name='password']:not(.hide), input[id='password']", self.password)
 
             login_btn = page.locator("button[data-action-button-primary='true'], button[type='submit']:not(.ulp-hidden-form-submit-button), button:has-text('Log In'), button:has-text('Sign In')").first
             self.log("Clicking Log In / Submit button...")
