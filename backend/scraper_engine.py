@@ -523,17 +523,8 @@ class ScraperJob:
                 if update_progress_cb: update_progress_cb("Filling email address...", 2)
                 
                 page.fill("input[name='username'], input[id='username'], input[type='email']", self.email)
-
-                cont_btn = page.locator("button[data-action-button-primary='true'], button._button-login-id, button[type='submit']:not(.ulp-hidden-form-submit-button), button:has-text('Continue')").first
-                self.log("Clicking Continue button...")
-                try:
-                    if cont_btn.count() > 0 and cont_btn.is_visible():
-                        cont_btn.click()
-                    else:
-                        username_inp.press("Enter")
-                except Exception as e:
-                    self.log(f"Continue button click note: {e}, falling back to Enter key press...")
-                    username_inp.press("Enter")
+                self.log("Pressing Enter to submit email...")
+                page.keyboard.press("Enter")
                     
                 # Dynamically wait for password input or error message
                 try:
@@ -549,17 +540,8 @@ class ScraperJob:
             self.log("Filling password...")
             if update_progress_cb: update_progress_cb("Submitting password...", 2)
             page.fill("input[name='password']:not(.hide), input[id='password']", self.password)
-
-            login_btn = page.locator("button[data-action-button-primary='true'], button[type='submit']:not(.ulp-hidden-form-submit-button), button:has-text('Log In'), button:has-text('Sign In')").first
-            self.log("Clicking Log In / Submit button...")
-            try:
-                if login_btn.count() > 0 and login_btn.is_visible():
-                    login_btn.click()
-                else:
-                    pwd_inp.press("Enter")
-            except Exception as e:
-                self.log(f"Log In button click note: {e}, falling back to Enter key press...")
-                pwd_inp.press("Enter")
+            self.log("Pressing Enter to submit password...")
+            page.keyboard.press("Enter")
                 
             self.log("Waiting for post-login redirection or MFA challenge...")
             
@@ -1127,12 +1109,10 @@ def detect_extension(file_bytes: bytes, content_type: str) -> str:
     """Inspects magic bytes to determine file extension."""
     if file_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
         return "png"
-    elif file_bytes.startswith(b"\xff\xd8\xff"):
+    elif file_bytes.startswith(b"\xff\xd8"):
         return "jpg"
-    elif b"ftypmp4" in file_bytes[:32] or b"ftypisom" in file_bytes[:32]:
-        return "mp4"
-    elif b"ftypqt" in file_bytes[:32]:
-        return "mov"
+    elif b"ftyp" in file_bytes[:64] or b"moov" in file_bytes[:64] or b"mdat" in file_bytes[:64]:
+        return "mov" if b"ftypqt" in file_bytes[:64] else "mp4"
     if "png" in content_type: return "png"
     if "mp4" in content_type: return "mp4"
     if "video" in content_type: return "mp4"
