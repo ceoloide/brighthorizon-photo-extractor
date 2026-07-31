@@ -354,15 +354,16 @@ class ScraperJob:
 
     def solve_and_wait_turnstile(self, page: Page, max_wait_sec: int = 50, update_progress_cb: Optional[Callable[[str, int], None]] = None) -> bool:
         """
-        Triggers Turnstile frame verification click and dynamically polls DOM for 'Success!' / 'success'
-        for up to max_wait_sec (doubled timeout).
+        Triggers Turnstile frame verification click and dynamically polls DOM for 'Success!' / 'success'.
+        Checks for 'Verify you are human' failure text and retries clicking frame if needed.
         """
         self.log(f"Waiting for Cloudflare Turnstile verification (up to {max_wait_sec}s)...")
         if update_progress_cb:
             update_progress_cb("Waiting for Cloudflare security check...", 2)
 
-        has_clicked = False
         start_t = time.time()
+        last_click_t = 0.0
+
         while time.time() - start_t < max_wait_sec:
             # Inspect overall page body & frame text for 'Success!' verification
             full_text = ""
@@ -379,25 +380,38 @@ class ScraperJob:
                     pass
 
             combined = full_text + " " + frame_texts
+            
             if "success!" in combined or "success" in combined or "verified" in combined:
                 self.log(f"🎉 Cloudflare Turnstile dynamically verified ('Success!') after {int(time.time() - start_t)}s!")
                 return True
 
-            # Trigger Turnstile click if challenge frame is present and not yet clicked
-            if not has_clicked:
-                for frame in page.frames:
-                    if "challenges.cloudflare.com" in frame.url:
-                        self.log("Cloudflare Turnstile frame detected. Sending verification click...")
-                        try:
-                            frame.click("body", position={"x": 30, "y": 30})
-                            has_clicked = True
-                            page.wait_for_timeout(3000)
-                        except Exception as e:
-                            self.log(f"Turnstile click note: {e}")
+            # If Turnstile challenge requires click ("verify you are human")
+            if "verify you are human" in combined or "verify you are a human" in combined or "challenges.cloudflare.com" in combined:
+                if time.time() - last_click_t > 5.0: # Re-click every 5s if still unverified
+                    for frame in page.frames:
+                        if "challenges.cloudflare.com" in frame.url:
+                            self.log("Cloudflare Turnstile challenge frame detected. Sending verification click...")
+                            try:
+                                frame.click("body", position={"x": 30, "y": 30})
+                                last_click_t = time.time()
+                                page.wait_for_timeout(2000)
+                            except Exception as e:
+                                self.log(f"Turnstile click note: {e}")
 
             page.wait_for_timeout(1000)
 
-        self.log(f"Turnstile wait finished after {max_wait_sec}s. Proceeding to submit...")
+        # Final check for failure state
+        final_text = ""
+        try:
+            final_text = page.locator("body").inner_text().lower()
+        except Exception:
+            pass
+
+        if "verify you are human" in final_text or "verify you are a human" in final_text:
+            self.log("Cloudflare Turnstile failed: 'Verify you are human' challenge remained unsolved.")
+            raise Exception("Cloudflare Turnstile security verification failed ('Verify you are human' required).")
+
+        self.log(f"Turnstile wait finished after {max_wait_sec}s. Proceeding...")
         return False
 
     def perform_login(self, page: Page, update_progress_cb: Optional[Callable[[str, int], None]] = None):
