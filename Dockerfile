@@ -35,9 +35,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpango-1.0-0 \
     libcairo2 \
     libasound2 \
-    fonts-liberation \
-    xvfb \
     xauth \
+    && curl -sSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/chrome.deb \
+    && apt-get install -y --no-install-recommends /tmp/chrome.deb \
+    && rm /tmp/chrome.deb \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python requirements

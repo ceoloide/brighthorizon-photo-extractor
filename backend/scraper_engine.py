@@ -73,8 +73,10 @@ def launch_stealth_persistent_context(playwright_instance, user_data_dir: str, e
     context_kwargs.update(kwargs)
 
     # Try launching real system Chrome executable or channel
-    if os.path.exists("/usr/bin/google-chrome"):
-        context_kwargs["executable_path"] = "/usr/bin/google-chrome"
+    chrome_paths = ["/usr/bin/google-chrome-stable", "/usr/bin/google-chrome"]
+    found_chrome = next((p for p in chrome_paths if os.path.exists(p)), None)
+    if found_chrome:
+        context_kwargs["executable_path"] = found_chrome
     else:
         context_kwargs["channel"] = "chrome"
 
