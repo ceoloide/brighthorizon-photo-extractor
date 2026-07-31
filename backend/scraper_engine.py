@@ -1017,11 +1017,24 @@ class ScraperJob:
                         try:
                             response = page.request.get(download_url, timeout=120000)
                             if response.status == 200:
-                                file_bytes = response.body()
-                                header_mime = response.headers.get("content-type", "")
-                                if header_mime and "text/html" not in header_mime:
-                                    mime_type = header_mime
-                                break
+                                body_data = response.body()
+                                # Unpack Bright Horizons signed_url JSON if returned
+                                try:
+                                    json_data = json.loads(body_data.decode("utf-8"))
+                                    if isinstance(json_data, dict) and "signed_url" in json_data:
+                                        signed_url = json_data["signed_url"]
+                                        if "mime_type" in json_data and json_data["mime_type"]:
+                                            mime_type = json_data["mime_type"]
+                                        media_resp = page.request.get(signed_url, timeout=120000)
+                                        if media_resp.status == 200:
+                                            file_bytes = media_resp.body()
+                                            break
+                                except Exception:
+                                    file_bytes = body_data
+                                    header_mime = response.headers.get("content-type", "")
+                                    if header_mime and "text/html" not in header_mime:
+                                        mime_type = header_mime
+                                    break
                             elif response.status in [401, 403]:
                                 self.log(f"HTTP {response.status} when fetching obj_id {obj_id[:8]}... Session may be invalid.")
                                 break
