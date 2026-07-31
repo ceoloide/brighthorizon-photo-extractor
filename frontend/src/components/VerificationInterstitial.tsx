@@ -41,10 +41,6 @@ export const VerificationInterstitial: React.FC<VerificationInterstitialProps> =
   const [mfaSubmitting, setMfaSubmitting] = useState<boolean>(false);
   const [mfaError, setMfaError] = useState<string | null>(null);
 
-  // Live preview interactivity state (Default: Locked)
-  const [isUnlocked, setIsUnlocked] = useState<boolean>(false);
-  const [clickRipple, setClickRipple] = useState<{ x: number; y: number; id: number } | null>(null);
-
   // 1-second ticker to smoothly increment smart relative timestamp
   useEffect(() => {
     const timer = setInterval(() => {
@@ -111,29 +107,6 @@ export const VerificationInterstitial: React.FC<VerificationInterstitialProps> =
       desc: 'Reading Angular CDK portal child cards'
     }
   ];
-
-  const handlePreviewClick = async (e: React.MouseEvent<HTMLImageElement>) => {
-    if (!isUnlocked) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x_percent = (e.clientX - rect.left) / rect.width;
-    const y_percent = (e.clientY - rect.top) / rect.height;
-
-    const rippleId = Date.now();
-    setClickRipple({ x: e.clientX - rect.left, y: e.clientY - rect.top, id: rippleId });
-    setTimeout(() => {
-      setClickRipple((prev) => (prev?.id === rippleId ? null : prev));
-    }, 900);
-
-    try {
-      await fetch('/api/auth/interact-preview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, x_percent, y_percent })
-      });
-    } catch (err) {
-      console.error('Failed to replicate click:', err);
-    }
-  };
 
   const handleNextStep = async () => {
     try {
@@ -214,20 +187,6 @@ export const VerificationInterstitial: React.FC<VerificationInterstitialProps> =
               <Monitor className="w-4 h-4 text-indigo-600" />
               <span>Live Preview</span>
             </span>
-
-            {/* Lock / Unlock Toggle Switch */}
-            <button
-              type="button"
-              onClick={() => setIsUnlocked(!isUnlocked)}
-              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1.5 transition ${
-                isUnlocked
-                  ? 'bg-amber-100 text-amber-900 border border-amber-300 shadow-sm'
-                  : 'bg-slate-100 text-slate-600 border border-slate-200 hover:bg-slate-200'
-              }`}
-            >
-              {isUnlocked ? <Unlock className="w-3.5 h-3.5 text-amber-600" /> : <Lock className="w-3.5 h-3.5 text-slate-500" />}
-              <span>{isUnlocked ? 'Unlocked (Interactive)' : 'Locked'}</span>
-            </button>
           </div>
 
           <div className="bg-slate-950 rounded-xl border border-slate-800 p-2 overflow-hidden flex flex-col items-center justify-center w-full max-w-xl sm:max-w-2xl mx-auto relative group">
@@ -236,19 +195,8 @@ export const VerificationInterstitial: React.FC<VerificationInterstitialProps> =
                 <img
                   src={status.frame_url || status.screenshot}
                   alt="Live Preview"
-                  onClick={handlePreviewClick}
-                  className={`w-full h-full object-contain rounded-lg shadow-md ${
-                    isUnlocked ? 'cursor-crosshair ring-2 ring-amber-400/50' : 'cursor-default'
-                  }`}
+                  className="w-full h-full object-contain rounded-lg shadow-md cursor-default"
                 />
-                {/* Visual Click Indicator Ripple */}
-                {clickRipple && (
-                  <span
-                    key={clickRipple.id}
-                    style={{ left: clickRipple.x - 12, top: clickRipple.y - 12 }}
-                    className="absolute w-6 h-6 rounded-full bg-amber-400/80 animate-ping pointer-events-none"
-                  />
-                )}
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center py-16 text-slate-500 gap-2">

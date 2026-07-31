@@ -141,17 +141,6 @@ class ScraperJob:
             if random.random() < 0.15:
                 page.wait_for_timeout(random.randint(100, 220))
 
-    def click_preview(self, x_percent: float, y_percent: float):
-        """Replicates a user tap or click from the 360x640 mobile preview onto the XVFB headful browser page."""
-        if hasattr(self, "_active_page") and self._active_page and not self._active_page.is_closed():
-            try:
-                x_px = int(x_percent * 360)
-                y_px = int(y_percent * 640)
-                self.log(f"Replicating preview tap at ({x_px}px, {y_px}px) on 360x640 mobile display...")
-                self._active_page.mouse.click(x_px, y_px)
-            except Exception as e:
-                self.log(f"Preview tap replication error: {e}")
-
     def log(self, message: str):
         timestamp = datetime.now().strftime("%H:%M:%S")
         entry = f"[{timestamp}] {message}"
