@@ -41,7 +41,15 @@ def capture_compressed_b64_frame(page: Page, width=1280, height=720) -> Optional
 
 def clean_user_data_locks(user_data_dir: str):
     """Safely removes stale Chromium Singleton lock files to prevent browser launch crashes."""
-    return _clean_user_data_locks(user_data_dir)
+    if not os.path.exists(user_data_dir):
+        return
+    for root, dirs, files in os.walk(user_data_dir):
+        for fname in files:
+            if "Singleton" in fname or fname == "RunningChromeVersion":
+                try:
+                    os.remove(os.path.join(root, fname))
+                except Exception:
+                    pass
 
 def launch_stealth_persistent_context(playwright_instance, user_data_dir: str, extra_args: list = None, **kwargs):
     """Launches a persistent browser context targeting real system Chrome with anti-bot masking flags."""
