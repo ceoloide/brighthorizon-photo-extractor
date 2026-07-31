@@ -70,9 +70,7 @@ export const App: React.FC = () => {
     setChildrenList([]);
   };
 
-  if (isMobile) {
-    return <MobileBlocked />;
-  }
+  // Mobile devices are now fully supported!
 
   if (checking) {
     return (

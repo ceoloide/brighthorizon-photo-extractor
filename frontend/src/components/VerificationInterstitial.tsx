@@ -230,9 +230,9 @@ export const VerificationInterstitial: React.FC<VerificationInterstitialProps> =
             </button>
           </div>
 
-          <div className="bg-slate-950 rounded-xl border border-slate-800 p-2 overflow-hidden flex flex-col items-center justify-center min-h-[320px] max-w-[340px] mx-auto relative group">
+          <div className="bg-slate-950 rounded-xl border border-slate-800 p-2 overflow-hidden flex flex-col items-center justify-center w-full max-w-xl sm:max-w-2xl mx-auto relative group">
             {status.frame_url || status.screenshot ? (
-              <div className="relative w-full aspect-[360/640] flex items-center justify-center">
+              <div className="relative w-full aspect-[16/9] flex items-center justify-center bg-slate-900 rounded-lg">
                 <img
                   src={status.frame_url || status.screenshot}
                   alt="Live Preview"
