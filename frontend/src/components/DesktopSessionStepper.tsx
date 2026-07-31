@@ -176,22 +176,34 @@ export const DesktopSessionStepper: React.FC<DesktopSessionStepperProps> = ({ on
                   <ExternalLink className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold text-slate-900">Log In on Bright Horizons</h3>
+                  <h3 className="text-sm font-semibold text-slate-900">1. Log In & Open My Bright Day Timeline</h3>
                   <p className="text-xs text-slate-600 leading-relaxed mt-1">
-                    Click the button below to open Bright Horizons in a new browser tab. Log in with your email, password, and MFA code in that tab.
+                    Click the button below to open Bright Horizons. Log in to your portal, then click <strong>Actions → My Bright Day</strong> on your child's card to land on the <strong>My Bright Day timeline tab</strong>.
                   </p>
                 </div>
               </div>
 
-              <a
-                href="https://familyinfocenter.brighthorizons.com/okta/login"
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center justify-center space-x-2 w-full bg-white hover:bg-slate-100 text-indigo-700 border border-indigo-200 font-semibold py-3 px-4 rounded-xl text-sm transition-colors shadow-sm"
-              >
-                <span>Open Bright Horizons Login in New Tab</span>
-                <ExternalLink className="w-4 h-4" />
-              </a>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <a
+                  href="https://familyinfocenter.brighthorizons.com/okta/login"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center justify-center space-x-2 w-full bg-white hover:bg-slate-100 text-indigo-700 border border-indigo-200 font-semibold py-3 px-4 rounded-xl text-xs transition-colors shadow-sm"
+                >
+                  <span>1. Open Portal Login</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+
+                <a
+                  href="https://mybrightday.brighthorizons.com/dashboard/parents.html"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center justify-center space-x-2 w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-300 font-semibold py-3 px-4 rounded-xl text-xs transition-colors shadow-sm"
+                >
+                  <span>2. Open My Bright Day Tab</span>
+                  <ExternalLink className="w-3.5 h-3.5 text-indigo-600" />
+                </a>
+              </div>
             </div>
 
             <div className="flex items-center justify-between pt-2">
@@ -205,7 +217,7 @@ export const DesktopSessionStepper: React.FC<DesktopSessionStepperProps> = ({ on
                 onClick={() => setStep(3)}
                 className="py-3 px-6 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl transition flex justify-center items-center gap-2 text-sm shadow-sm"
               >
-                <span>I Have Logged In →</span>
+                <span>I Have Opened My Bright Day →</span>
               </button>
             </div>
           </div>
@@ -215,15 +227,15 @@ export const DesktopSessionStepper: React.FC<DesktopSessionStepperProps> = ({ on
         {step === 3 && (
           <div className="space-y-6">
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-6 space-y-4">
-              <h3 className="text-sm font-semibold text-slate-900">1. Copy Session Extraction Code</h3>
+              <h3 className="text-sm font-semibold text-slate-900">2. Copy & Run Snippet on My Bright Day Tab</h3>
               <p className="text-xs text-slate-600 leading-relaxed">
-                Click <strong>Copy Code</strong> below. Switch to your Bright Horizons browser tab address bar, type <span className="font-mono text-indigo-700 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded font-semibold">javascript:</span> into the address bar, then paste the copied code directly after it and press Enter.
+                Click <strong>Copy Code</strong> below. Switch to your open <strong>My Bright Day timeline tab</strong> (<code className="font-mono text-indigo-700 bg-indigo-50 px-1 py-0.5 rounded">mybrightday.brighthorizons.com</code>), click the address bar, type <span className="font-mono text-indigo-700 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded font-semibold">javascript:</span>, paste the code directly after it, and press <strong>Enter</strong>.
               </p>
 
               <div className="relative bg-slate-900 border border-slate-800 rounded-xl p-3.5 font-mono text-xs">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
-                    <span className="text-[10px] font-bold tracking-wider uppercase text-slate-400">ADDRESS BAR SNIPPET</span>
+                    <span className="text-[10px] font-bold tracking-wider uppercase text-slate-400">MY BRIGHT DAY EXTRACTION SNIPPET</span>
                     <button
                       type="button"
                       onClick={() => setShowSnippetCode(!showSnippetCode)}
@@ -245,7 +257,7 @@ export const DesktopSessionStepper: React.FC<DesktopSessionStepperProps> = ({ on
                 {showSnippetCode && (
                   <div className="mt-3 pt-3 border-t border-slate-800 space-y-2">
                     <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
-                      💡 <strong>Why type <code className="text-amber-300 font-mono">javascript:</code> manually?</strong> Browsers automatically strip the leading <code className="text-amber-300 font-mono">javascript:</code> prefix when you paste into an address bar for security reasons. Typing <code className="text-amber-300 font-mono">javascript:</code> first ensures the code executes as a bookmarklet.
+                      💡 <strong>Why type <code className="text-amber-300 font-mono">javascript:</code> manually?</strong> Browsers automatically strip the leading <code className="text-amber-300 font-mono">javascript:</code> prefix when pasting into address bars. Typing <code className="text-amber-300 font-mono">javascript:</code> first ensures the code executes on your My Bright Day tab.
                     </p>
                     <p className="text-amber-300 text-[10px] break-all select-all font-mono bg-slate-950 p-3 rounded-lg border border-slate-800 max-h-36 overflow-y-auto leading-relaxed">
                       {snippetCode}
