@@ -431,15 +431,15 @@ class ScraperJob:
                 username_inp = page.locator("input[name='username'], input[id='username'], input[type='email']").first
                 username_inp.wait_for(state="visible", timeout=50000)
                 
-                # Step 2: Type email address
-                self.log("Typing email address into SSO username input...")
+                # Step 2: Solve & confirm Cloudflare Turnstile verification FIRST
+                self.solve_and_wait_turnstile(page, max_wait_sec=50, update_progress_cb=update_progress_cb)
+
+                # Step 3: Type email address AFTER Turnstile verification succeeds
+                self.log("Cloudflare Turnstile verified! Typing email address into SSO username input...")
                 if update_progress_cb: update_progress_cb("Typing email address...", 2)
                 
                 self.human_type(page, username_inp, self.email)
                 page.wait_for_timeout(1000)
-
-                # Dynamically solve & wait for Cloudflare Turnstile "Success!" (50s doubled timeout)
-                self.solve_and_wait_turnstile(page, max_wait_sec=50, update_progress_cb=update_progress_cb)
 
                 cont_btn = page.locator("button[data-action-button-primary='true'], button._button-login-id, button[type='submit']:not(.ulp-hidden-form-submit-button), button:has-text('Continue')").first
                 self.log("Clicking Continue button...")
