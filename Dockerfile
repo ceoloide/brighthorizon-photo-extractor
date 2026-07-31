@@ -1,4 +1,12 @@
-# Single-stage Production Runtime Dockerfile
+# Stage 1: Build Frontend React Bundle
+FROM node:20-alpine AS frontend-builder
+WORKDIR /app/frontend
+COPY frontend/package*.json ./
+RUN npm install
+COPY frontend/ ./
+RUN npm run build
+
+# Stage 2: Production Python Runtime
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -41,7 +49,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # Copy application source & built frontend assets
 COPY backend/ ./backend/
 COPY main.py .
-COPY frontend/dist ./frontend/dist
+COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
 EXPOSE 8095
 
