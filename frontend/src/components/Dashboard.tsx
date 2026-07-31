@@ -47,9 +47,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
     fetchStatus();
   }, [token]);
 
-  // Connect to real-time SSE extraction events stream while running
+  // Connect to real-time SSE extraction events stream & poll while running
   useEffect(() => {
     let sse: EventSource | null = null;
+    let pollTimer: any = null;
+
     if (status.state === 'running') {
       const url = `/api/extraction/events?token=${encodeURIComponent(token)}`;
       sse = new EventSource(url);
@@ -57,7 +59,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
         if (e.data) {
           try {
             const data = JSON.parse(e.data);
-            setStatus(data);
+            setStatus((prev: any) => {
+              if ((data.files_downloaded || 0) > (prev?.files_downloaded || 0)) {
+                setRefreshTrigger((r) => r + 1);
+              }
+              return data;
+            });
             if (data.state === 'completed') {
               setRefreshTrigger((prev) => prev + 1);
               setCancelling(false);
@@ -70,9 +77,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
       sse.onerror = () => {
         sse?.close();
       };
+
+      // Fallback periodic poll to ensure gallery refreshes dynamically
+      pollTimer = setInterval(() => {
+        fetchStatus();
+      }, 4000);
     }
+
     return () => {
-      sse?.close();
+      if (sse) sse.close();
+      if (pollTimer) clearInterval(pollTimer);
     };
   }, [status.state, token]);
 

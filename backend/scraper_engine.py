@@ -1001,13 +1001,30 @@ class ScraperJob:
                     date_text = overlay_span.inner_text().strip() if overlay_span.count() > 0 else ""
                     date_str = parse_date(date_text, tf_text)
                     
-                    # Fetch file bytes via Playwright request
-                    response = page.request.get(download_url)
-                    if response.status != 200:
+                    # Fetch file bytes via Playwright request with 120s timeout & retries
+                    file_bytes = None
+                    mime_type = "image/jpeg"
+                    for attempt in range(3):
+                        try:
+                            response = page.request.get(download_url, timeout=120000)
+                            if response.status == 200:
+                                file_bytes = response.body()
+                                mime_type = response.headers.get("content-type", "image/jpeg")
+                                break
+                            elif response.status in [401, 403]:
+                                self.log(f"HTTP {response.status} when fetching obj_id {obj_id[:8]}... Session may be invalid.")
+                                break
+                            else:
+                                self.log(f"HTTP {response.status} attempt #{attempt + 1} for obj_id {obj_id[:8]}...")
+                        except Exception as fetch_err:
+                            if attempt == 2:
+                                self.log(f"Failed fetching obj_id {obj_id[:8]}... after 3 attempts: {fetch_err}")
+                            else:
+                                time.sleep(2.0)
+
+                    if not file_bytes:
                         continue
                         
-                    file_bytes = response.body()
-                    mime_type = response.headers.get("content-type", "image/jpeg")
                     ext = detect_extension(file_bytes, mime_type)
                     
                     orig_filename = f"{child_name} {date_str} ({obj_id[:6]}).{ext}"
