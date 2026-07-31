@@ -357,23 +357,8 @@ class ScraperJob:
     def solve_and_wait_turnstile(self, page: Page, max_wait_sec: int = 50, update_progress_cb: Optional[Callable[[str, int], None]] = None) -> bool:
         """
         Monitors Cloudflare Turnstile verification via token presence and text signals.
-        Exits immediately if no Turnstile challenge is present on the page or upon verification.
+        Strictly waits for Turnstile clearance before returning.
         """
-        # Fast pre-check: return immediately if no Turnstile challenge widget exists on page
-        has_turnstile = False
-        try:
-            has_turnstile = page.evaluate("""() => {
-                const iframe = document.querySelector("iframe[src*='challenges.cloudflare.com']");
-                const input = document.querySelector("input[name='cf-turnstile-response'], input[name='g-recaptcha-response']");
-                return !!(iframe || input);
-            }""")
-        except Exception:
-            pass
-
-        if not has_turnstile:
-            self.log("[Turnstile] No Turnstile widget detected on current step. Advancing immediately.")
-            return True
-
         self.log(f"[Turnstile] Monitoring Turnstile security check (timeout: {max_wait_sec}s)...")
         if update_progress_cb:
             update_progress_cb("Waiting for Cloudflare security check...", 2)
