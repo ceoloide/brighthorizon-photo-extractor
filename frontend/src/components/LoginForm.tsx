@@ -28,7 +28,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
         email={email}
         password={password}
         onSuccess={(token, data) => {
-          onLoginSuccess(token, data);
+          onLoginSuccess(token, { ...data, email: data?.email || email });
         }}
         onCancel={() => {
           setVerifying(false);

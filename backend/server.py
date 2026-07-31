@@ -129,6 +129,7 @@ def _start_verification_thread(email: str, password: str, tenant_storage: Tenant
             token = create_jwt_token(email, tenant_id)
             state["status"] = "success"
             state["token"] = token
+            state["email"] = email
             state["children"] = children
             state["step"] = "Verification complete!"
             state["timestamp"] = time.time()

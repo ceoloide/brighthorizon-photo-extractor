@@ -464,6 +464,26 @@ class ScraperJob:
         self.log(f"[Turnstile] Monitoring window ended after {max_wait_sec}s. Token not detected.")
         return True
 
+    def check_auth0_errors(self, page: Page):
+        """Scans page for Auth0 credential validation error messages and raises an Exception if present."""
+        # 1. Selector check for error banners & input error messages
+        error_loc = page.locator("span#error-element-password, div#error-element-password, span#error-element-username, div#error-element-username, .ulp-input-error-message, .alert-danger, [data-error-code]").first
+        if error_loc.count() > 0 and error_loc.is_visible():
+            err_text = error_loc.inner_text().strip()
+            if err_text:
+                self.log(f"Auth0 authentication error detected: '{err_text}'")
+                raise Exception(f"Authentication failed: {err_text}")
+
+        # 2. Text check on page body for standard error phrases
+        try:
+            body_text = page.locator("body").inner_text().lower()
+            if any(p in body_text for p in ["wrong email or password", "wrong password", "invalid email or password", "incorrect email or password", "user does not exist", "invalid username or password"]):
+                self.log("Auth0 error text detected in DOM body.")
+                raise Exception("Authentication failed: Wrong email or password.")
+        except Exception as e:
+            if "Authentication failed:" in str(e):
+                raise e
+
     def perform_login(self, page: Page, update_progress_cb: Optional[Callable[[str, int], None]] = None):
         """Ultra-robust login handler following the exact Bright Horizons & Auth0 SSO authentication sequence."""
         self._active_page = page
@@ -517,7 +537,8 @@ class ScraperJob:
                     self.log(f"Continue button click note: {e}, falling back to Enter key press...")
                     username_inp.press("Enter")
                     
-                page.wait_for_timeout(6000)
+                page.wait_for_timeout(4000)
+                self.check_auth0_errors(page)
 
             # Step 3: Type password & submit
             pwd_inp = page.locator("input[name='password']:not(.hide), input[id='password']").first
@@ -543,7 +564,8 @@ class ScraperJob:
                 pwd_inp.press("Enter")
                 
             self.log("Waiting for post-login redirection or MFA challenge...")
-            page.wait_for_timeout(8000)
+            page.wait_for_timeout(4000)
+            self.check_auth0_errors(page)
             
             # Step 5: Email Verification Code (MFA) & "Remember this device for 30 days"
             state = self.detect_page_state(page, max_wait_sec=10)
@@ -587,6 +609,7 @@ class ScraperJob:
                     mfa_inp.press("Enter")
                     
                 page.wait_for_timeout(5000)
+                self.check_auth0_errors(page)
                 self.status["state"] = "running"
                 
             # Step 6: Verify portal home page load & child profiles ("Byron")
@@ -597,11 +620,8 @@ class ScraperJob:
                 pass
             page.wait_for_timeout(2000)
             
-            # Check for error elements on SSO form
-            error_el = page.locator("span.ulp-input-error-message, div.alert-danger, span#error-element-password").first
-            if error_el.count() > 0 and error_el.is_visible():
-                err_text = error_el.inner_text().strip()
-                raise Exception(f"Authentication failed: {err_text}")
+            # Final check for error elements on SSO form
+            self.check_auth0_errors(page)
                 
             self.log(f"Authenticated state verified! Current URL: {page.url}")
 
