@@ -218,12 +218,42 @@ class ScraperJob:
                 
                 # Check existing authentication state
                 self.status["current_step"] = "Verifying portal session"
-                self.log("Navigating to https://mybrightday.brighthorizons.com/dashboard/parents.html...")
-                page.goto("https://mybrightday.brighthorizons.com/dashboard/parents.html", wait_until="domcontentloaded")
-                time.sleep(3.0)
+                self.log("Navigating to https://familyinfocenter.brighthorizons.com/home...")
+                page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
+                time.sleep(4.0)
                 
-                if "login" not in page.url and ("parents.html" in page.url or "tadpoles" in page.title().lower()):
-                    self.log("Authenticated portal page verified via saved session on My Bright Day!")
+                if "login" in page.url or "okta" in page.url:
+                    self.log("Saved session expired or missing; purging session state...")
+                    context.close()
+                    self._active_page = None
+                    self.tenant_storage.clear_session()
+                    raise Exception("Session expired or invalid. Please re-authenticate and provide fresh session cookies.")
+
+                # Trigger SSO token redirect from Family Info Center to My Bright Day if on familyinfocenter
+                if "familyinfocenter" in page.url:
+                    self.log("Triggering SSO token redirect from Family Information Center...")
+                    spans = page.locator("span").all()
+                    actions_spans = [s for s in spans if "Actions" in s.inner_text()]
+                    for span in actions_spans:
+                        try:
+                            span.click()
+                            time.sleep(1.5)
+                            mbd = page.locator("span.actions-menu-item-label", has_text="My Bright Day").first
+                            if mbd.is_visible():
+                                with context.expect_page() as new_page_info:
+                                    mbd.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
+                                mbd_page = new_page_info.value
+                                mbd_page.wait_for_load_state("domcontentloaded")
+                                page = mbd_page
+                                self._active_page = page
+                                time.sleep(6.0)
+                                self.log(f"Successfully landed on My Bright Day via SSO: {page.url}")
+                                break
+                        except Exception as e:
+                            self.log(f"Actions click attempt note: {e}")
+
+                if "login" not in page.url and ("parents.html" in page.url or "familyinfocenter" in page.url or "tadpoles" in page.title().lower()):
+                    self.log("Authenticated portal page verified via saved session!")
                 else:
                     self.log("Saved session expired or missing; purging session state...")
                     context.close()
