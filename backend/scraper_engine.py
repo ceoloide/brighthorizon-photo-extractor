@@ -514,37 +514,43 @@ class ScraperJob:
             page = context.pages[0] if context.pages else context.new_page()
             self._active_page = page
             
-            self.log("Navigating to https://mybrightday.brighthorizons.com/dashboard/parents.html...")
-            page.goto("https://mybrightday.brighthorizons.com/dashboard/parents.html", wait_until="domcontentloaded")
+            authenticated = False
             
-            # My Bright Day loading takes 10-15s before elements render
-            self.log("Waiting for My Bright Day dashboard assets to load...")
-            time.sleep(12.0)
-            self.latest_preview_b64 = capture_compressed_b64_frame(page, 1280, 720)
-            
-            current_url = page.url
-            if "login" not in current_url and ("parents.html" in current_url or "tadpoles" in page.title().lower()):
-                authenticated = True
-                self.log("Session verified successfully on My Bright Day dashboard!")
-            else:
-                self.log("Navigating to https://familyinfocenter.brighthorizons.com/home...")
+            # Primary: Verify on Family Info Center home portal
+            self.log("Navigating to https://familyinfocenter.brighthorizons.com/home...")
+            try:
                 page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
                 start_time = time.time()
-                max_timeout = 30
-                while time.time() - start_time < max_timeout:
+                while time.time() - start_time < 12.0:
                     self.latest_preview_b64 = capture_compressed_b64_frame(page, 1280, 720) or self.latest_preview_b64
                     try:
                         actions_spans = page.locator("span", has_text="Actions")
-                        if actions_spans.count() > 0:
+                        if actions_spans.count() > 0 or ("login" not in page.url and "home" in page.url):
                             authenticated = True
+                            self.log("Session verified successfully on Family Information Center!")
                             break
                     except Exception:
                         pass
                     time.sleep(1.0)
+            except Exception as e:
+                self.log(f"Family Info Center navigation attempt notice: {e}")
+                
+            # Secondary fallback: Verify directly on My Bright Day dashboard
+            if not authenticated:
+                self.log("Navigating to https://mybrightday.brighthorizons.com/dashboard/parents.html...")
+                try:
+                    page.goto("https://mybrightday.brighthorizons.com/dashboard/parents.html", wait_until="domcontentloaded")
+                    time.sleep(8.0)
+                    self.latest_preview_b64 = capture_compressed_b64_frame(page, 1280, 720)
+                    current_url = page.url
+                    if "login" not in current_url and ("parents.html" in current_url or "tadpoles" in page.title().lower()):
+                        authenticated = True
+                        self.log("Session verified successfully on My Bright Day dashboard!")
+                except Exception as mbd_err:
+                    self.log(f"My Bright Day verification attempt notice: {mbd_err}")
                     
             if not authenticated:
                 context.close()
-                browser.close()
                 self._active_page = None
                 raise Exception("Portal verification failed. Please check session freshness.")
                 
