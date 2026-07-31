@@ -359,20 +359,33 @@ def import_session(req: ImportSessionRequest, response: Response):
         try:
             storage_dict = json.loads(storage_str) if isinstance(storage_str, str) else storage_str
             ls_items = []
+            valid_token_found = False
+            any_token_found = False
+            max_exp_ts = 0.0
+            
             if isinstance(storage_dict, dict):
                 for k, v in storage_dict.items():
                     ls_items.append({"name": k, "value": str(v)})
-                    if "@@auth0spajs@@" in str(k):
+                    if "@@auth0spajs@@" in str(k) or "access_token" in str(k):
                         try:
                             val_dict = json.loads(v) if isinstance(v, str) else v
-                            exp_raw = val_dict.get("expiresAt") or val_dict.get("body", {}).get("expires_at")
+                            exp_raw = val_dict.get("expiresAt") or val_dict.get("expires_at") or val_dict.get("exp")
+                            if not exp_raw and isinstance(val_dict, dict) and "body" in val_dict:
+                                exp_raw = val_dict["body"].get("expires_at")
                             exp_ts = parse_unix_timestamp(exp_raw)
-                            if exp_ts and exp_ts < time.time():
-                                token_expired = True
-                                expired_at = datetime.fromtimestamp(exp_ts).strftime("%I:%M %p")
-                                expired_at_str = f"Token expired at {expired_at}"
+                            if exp_ts:
+                                any_token_found = True
+                                if exp_ts > max_exp_ts:
+                                    max_exp_ts = exp_ts
+                                if exp_ts > time.time():
+                                    valid_token_found = True
                         except Exception:
                             pass
+
+            if any_token_found and not valid_token_found:
+                token_expired = True
+                expired_at = datetime.fromtimestamp(max_exp_ts).strftime("%I:%M %p") if max_exp_ts > 0 else "recently"
+                expired_at_str = f"Token expired at {expired_at}"
 
             origins = [
                 {"origin": "https://familyinfocenter.brighthorizons.com", "localStorage": ls_items},
