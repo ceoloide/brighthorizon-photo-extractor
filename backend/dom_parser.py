@@ -173,40 +173,46 @@ def extract_obj_id_from_url_or_style(href: str, style: str) -> Tuple[Optional[st
     """
     Parses obj_id, video indicator, and resolved URL from fancybox href or tile style.
     Handles HTML entities (e.g., &amp; -> &, &quot; -> ") and video CSS background-image fallback (Rule 2.C).
-    Case-insensitive when parsing CSS url(...) and iterates over all url(...) matches to find one with obj_attachment or obj=.
+
+    For video posts, a.fancybox has href="#<video_obj_id>-default". The video object ID is extracted
+    directly from the href fragment anchor so the actual MP4 video file is downloaded instead of the JPEG thumbnail.
 
     Returns: (obj_id, is_video, resolved_url)
     """
     href_clean = html.unescape(href.strip()) if href else ""
     style_clean = html.unescape(style.strip()) if style else ""
 
-    is_video = False
-    resolved_url = href_clean
+    # 1. Check if href is a video post fragment anchor (e.g. #6986168d2bb117b0dc910b3b-default)
+    if href_clean.startswith("#"):
+        frag = href_clean.lstrip("#")
+        m_frag = re.search(r'([a-f0-9]{12,64})', frag, re.IGNORECASE)
+        if m_frag:
+            video_obj_id = m_frag.group(1)
+            video_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={video_obj_id}&key={video_obj_id}"
+            return video_obj_id, True, video_url
 
-    # Rule 2.C: If href starts with '#' or lacks obj_attachment and obj=, it's a video post
-    if href_clean.startswith("#") or not href_clean or ("obj_attachment" not in href_clean and "obj=" not in href_clean):
-        is_video = True
+    # 2. Check if href is a direct obj_attachment URL
+    m_href_obj = re.search(r'obj=([^&#]+)', href_clean)
+    if m_href_obj:
+        return m_href_obj.group(1), False, href_clean
 
-    # Parse CSS background-image url(...) if needed or if style contains URL
-    if is_video or "obj=" not in resolved_url:
-        urls = []
-        for match in re.finditer(r'url\(\s*[\'"]?([^\'"\)]+)[\'"]?\s*\)', style_clean, re.IGNORECASE):
-            raw_u = match.group(1).strip()
-            u = html.unescape(raw_u)
-            urls.append(u)
+    # 3. Fallback: Parse CSS background-image url(...) from tile style
+    is_video = href_clean.startswith("#") or not href_clean or ("obj_attachment" not in href_clean and "obj=" not in href_clean)
+    urls = []
+    for match in re.finditer(r'url\(\s*[\'"]?([^\'"\)]+)[\'"]?\s*\)', style_clean, re.IGNORECASE):
+        raw_u = match.group(1).strip()
+        u = html.unescape(raw_u)
+        urls.append(u)
 
-        target_url = None
-        for u in urls:
-            if "obj_attachment" in u or "obj=" in u:
-                target_url = u
-                break
-        if not target_url and urls:
-            target_url = urls[0]
+    target_url = None
+    for u in urls:
+        if "obj_attachment" in u or "obj=" in u:
+            target_url = u
+            break
+    if not target_url and urls:
+        target_url = urls[0]
 
-        if target_url:
-            resolved_url = target_url
-
-    # Extract obj ID parameter
+    resolved_url = target_url or href_clean
     match_obj = re.search(r'obj=([^&#]+)', resolved_url)
     if match_obj:
         return match_obj.group(1), is_video, resolved_url
