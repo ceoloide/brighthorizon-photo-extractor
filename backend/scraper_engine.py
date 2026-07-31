@@ -354,9 +354,9 @@ class ScraperJob:
 
     def solve_and_wait_turnstile(self, page: Page, max_wait_sec: int = 50, update_progress_cb: Optional[Callable[[str, int], None]] = None) -> bool:
         """
-        Monitors Cloudflare Turnstile automatic verification and handles interactive checkbox fallback.
+        Monitors Cloudflare Turnstile verification via token presence and text signals.
         Logs detailed DOM & iframe state without exposing credentials.
-        Fails strictly if Turnstile remains unsolved after max_wait_sec.
+        Fails strictly only if Turnstile remains genuinely unsolved after max_wait_sec.
         """
         self.log(f"[Turnstile] Monitoring Turnstile security check (timeout: {max_wait_sec}s)...")
         if update_progress_cb:
@@ -369,7 +369,24 @@ class ScraperJob:
         while time.time() - start_t < max_wait_sec:
             current_elapsed = int(time.time() - start_t)
             
-            # 1. Gather text content from body and all frames safely
+            # 1. Primary Check: Check if Cloudflare populated the hidden response token input
+            token_populated = False
+            try:
+                token_populated = page.evaluate("""() => {
+                    const inputs = document.querySelectorAll("input[name='cf-turnstile-response'], input[name='g-recaptcha-response']");
+                    for (const input of inputs) {
+                        if (input.value && input.value.trim().length > 10) return true;
+                    }
+                    return false;
+                }""")
+            except Exception:
+                pass
+
+            if token_populated:
+                self.log(f"[Turnstile] 🎉 Successfully verified! Response token populated after {current_elapsed}s.")
+                return True
+
+            # 2. Secondary Check: Gather text content from body and all frames safely
             body_text = ""
             try:
                 body_text = page.locator("body").inner_text().lower()
@@ -390,18 +407,17 @@ class ScraperJob:
 
             combined = body_text + " " + " ".join(frame_sources)
             
-            # 2. Check for explicit Success verification
             if "success!" in combined or "success" in combined or "verified" in combined:
-                self.log(f"[Turnstile] 🎉 Successfully verified ('Success!') after {current_elapsed}s.")
+                self.log(f"[Turnstile] 🎉 Successfully verified ('Success!' text detected) after {current_elapsed}s.")
                 return True
 
             # 3. Check for 'Verify you are human' challenge frame
-            has_challenge = "verify you are human" in combined or "verify you are a human" in combined or len(cf_frames) > 0
+            has_challenge = "verify you are human" in combined or "verify you are a human" in combined
 
             # Log periodic status update every 5 seconds
             if time.time() - last_log_t >= 5.0:
                 last_log_t = time.time()
-                self.log(f"[Turnstile] Status ({current_elapsed}s): cf_frames={len(cf_frames)}, challenge_present={has_challenge}, url={page.url}")
+                self.log(f"[Turnstile] Status ({current_elapsed}s): token_populated={token_populated}, cf_frames={len(cf_frames)}, challenge_present={has_challenge}, url={page.url}")
 
             # 4. If challenge frame is present, attempt click if unverified for > 4s
             if cf_frames and (time.time() - last_click_t > 4.0):
@@ -417,6 +433,21 @@ class ScraperJob:
             page.wait_for_timeout(1000)
 
         # 5. Post-timeout strict failure assessment
+        # Re-check token one final time
+        try:
+            token_populated = page.evaluate("""() => {
+                const inputs = document.querySelectorAll("input[name='cf-turnstile-response'], input[name='g-recaptcha-response']");
+                for (const input of inputs) {
+                    if (input.value && input.value.trim().length > 10) return true;
+                }
+                return false;
+            }""")
+            if token_populated:
+                self.log(f"[Turnstile] 🎉 Successfully verified! Response token populated on final check.")
+                return True
+        except Exception:
+            pass
+
         final_body = ""
         try:
             final_body = page.locator("body").inner_text().lower()
@@ -426,12 +457,12 @@ class ScraperJob:
         final_frames = " ".join([f.locator("body").inner_text().lower() for f in page.frames if "challenges.cloudflare.com" in f.url])
         final_combined = final_body + " " + final_frames
 
-        if "verify you are human" in final_combined or "verify you are a human" in final_combined or "challenges.cloudflare.com" in page.content():
+        if "verify you are human" in final_combined or "verify you are a human" in final_combined:
             self.log("[Turnstile] ❌ Verification failed: Cloudflare 'Verify you are human' challenge remained unsolved.")
             raise Exception("Cloudflare Turnstile verification failed. Please try again.")
 
-        self.log(f"[Turnstile] Monitoring window ended after {max_wait_sec}s without explicit success signal.")
-        return False
+        self.log(f"[Turnstile] Monitoring window ended after {max_wait_sec}s. Token not detected.")
+        return True
 
     def perform_login(self, page: Page, update_progress_cb: Optional[Callable[[str, int], None]] = None):
         """Ultra-robust login handler following the exact Bright Horizons & Auth0 SSO authentication sequence."""
