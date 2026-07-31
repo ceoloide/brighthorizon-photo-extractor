@@ -21,7 +21,7 @@ VALID_MONTH_ABBRS = r'(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)'
 TIMEFRAME_REGEX = re.compile(rf'^{VALID_MONTH_ABBRS}\s+\d{{4}}$', re.IGNORECASE)
 
 def is_valid_timeframe_text(text: str) -> bool:
-    """
+    r"""
     Checks if text matches timeframe pattern ^(jan|feb|...)\s+\d{4}$ (Rule 2.A).
     Case-insensitive, strictly validating 3-letter month abbreviations.
     Stripped of leading/trailing whitespace.
@@ -29,6 +29,35 @@ def is_valid_timeframe_text(text: str) -> bool:
     if not text or not isinstance(text, str):
         return False
     return bool(TIMEFRAME_REGEX.match(text.strip()))
+
+
+def get_month_end_date(tf_text: str) -> Optional[str]:
+    """
+    Returns the last day of the month as 'YYYY-MM-DD' string for a timeframe text like 'may 2026'.
+    """
+    if not tf_text or not isinstance(tf_text, str):
+        return None
+    try:
+        parts = tf_text.strip().split()
+        if len(parts) >= 2:
+            m_str, y_str = parts[0].lower(), parts[1]
+            month_map = {
+                "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+                "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12
+            }
+            m_num = month_map.get(m_str[:3])
+            year = int(y_str)
+            if m_num and year:
+                if m_num in [1, 3, 5, 7, 8, 10, 12]:
+                    last_day = 31
+                elif m_num in [4, 6, 9, 11]:
+                    last_day = 30
+                else:
+                    last_day = 29 if (year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)) else 28
+                return f"{year:04d}-{m_num:02d}-{last_day:02d}"
+    except Exception:
+        pass
+    return None
 
 
 def parse_date_overlay(date_text: str, timeframe_year: Optional[int] = None) -> str:

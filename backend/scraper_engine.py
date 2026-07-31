@@ -15,7 +15,7 @@ import html
 from zoneinfo import ZoneInfo
 from playwright.sync_api import sync_playwright, BrowserContext, Page
 from backend.database import TenantStorage
-from backend.dom_parser import extract_obj_id_from_url_or_style
+from backend.dom_parser import extract_obj_id_from_url_or_style, get_month_end_date
 
 FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://192.168.1.176:8191/v1")
 
@@ -933,6 +933,14 @@ class ScraperJob:
 
             tf_text = tf_li.inner_text().strip()
             self.status["current_month"] = tf_text
+            
+            # Point (3) Optimization: check if timeframe month's end date is strictly prior to start_date
+            if self.start_date:
+                m_end = get_month_end_date(tf_text)
+                if m_end and m_end < self.start_date:
+                    self.log(f"Timeframe month '{tf_text}' (end date: {m_end}) is prior to start date {self.start_date}. Halting month scan for {child_name}.")
+                    break
+
             self.log(f"Navigating to timeframe: {tf_text}...")
             
             # Click inner div.tile (rule 2.A in AGENTS.md)
@@ -1030,7 +1038,18 @@ class ScraperJob:
                         
                     ext = detect_extension(file_bytes, mime_type)
                     
-                    orig_filename = f"{child_name} {date_str} ({obj_id[:6]}).{ext}"
+                    # Point (1): Calculate clean sequence-based filename without requiring obj_id
+                    current_manifest = self.tenant_storage.load_manifest()
+                    existing_for_day = [
+                        m for m in current_manifest.values()
+                        if m.get("child") == child_name and m.get("date") == date_str and m.get("obj_id") != obj_id
+                    ]
+                    seq = len(existing_for_day) + 1
+                    if seq == 1:
+                        orig_filename = f"{child_name} {date_str}.{ext}"
+                    else:
+                        orig_filename = f"{child_name} {date_str} ({seq}).{ext}"
+
                     comment_text = f"Bright Horizons photo for {child_name} on {date_str}"
                     
                     # Save to tenant storage
