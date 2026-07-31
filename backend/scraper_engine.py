@@ -14,7 +14,6 @@ from typing import Dict, Any, List, Callable, Optional, Tuple
 from zoneinfo import ZoneInfo
 from playwright.sync_api import sync_playwright, BrowserContext, Page
 from backend.database import TenantStorage
-from backend.security_isolation import clean_user_data_locks as _clean_user_data_locks
 
 FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://192.168.1.176:8191/v1")
 
