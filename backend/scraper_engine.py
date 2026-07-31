@@ -518,11 +518,12 @@ class ScraperJob:
                 if not self.solve_and_wait_turnstile(page, max_wait_sec=50, update_progress_cb=update_progress_cb):
                     raise Exception("Cloudflare Turnstile security verification failed.")
 
-                # Step 3: Type email address AFTER Turnstile verification succeeds
-                self.log("Cloudflare Turnstile verified! Typing email address into SSO username input...")
-                if update_progress_cb: update_progress_cb("Typing email address...", 2)
+                # Step 3: Fill email address AFTER Turnstile verification succeeds
+                self.log("Cloudflare Turnstile verified! Filling email address into SSO username input...")
+                if update_progress_cb: update_progress_cb("Filling email address...", 2)
                 
-                self.human_type(page, username_inp, self.email)
+                username_inp.click(force=True)
+                username_inp.fill(self.email)
 
                 cont_btn = page.locator("button[data-action-button-primary='true'], button._button-login-id, button[type='submit']:not(.ulp-hidden-form-submit-button), button:has-text('Continue')").first
                 self.log("Clicking Continue button...")
@@ -548,11 +549,9 @@ class ScraperJob:
             
             self.log("Filling password...")
             if update_progress_cb: update_progress_cb("Submitting password...", 2)
-            self.human_type(page, pwd_inp, self.password)
+            pwd_inp.click(force=True)
+            pwd_inp.fill(self.password)
 
-            # Fast Turnstile check (returns in 0.01s if no Turnstile challenge is present on password step)
-            self.solve_and_wait_turnstile(page, max_wait_sec=10, update_progress_cb=update_progress_cb)
-            
             login_btn = page.locator("button[data-action-button-primary='true'], button[type='submit']:not(.ulp-hidden-form-submit-button), button:has-text('Log In'), button:has-text('Sign In')").first
             self.log("Clicking Log In / Submit button...")
             try:
