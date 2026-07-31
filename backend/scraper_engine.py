@@ -11,9 +11,11 @@ import threading
 import zlib
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Callable, Optional, Tuple
+import html
 from zoneinfo import ZoneInfo
 from playwright.sync_api import sync_playwright, BrowserContext, Page
 from backend.database import TenantStorage
+from backend.dom_parser import extract_obj_id_from_url_or_style
 
 FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://192.168.1.176:8191/v1")
 
@@ -956,20 +958,13 @@ class ScraperJob:
                     if fancybox.count() == 0:
                         continue
                         
-                    href = fancybox.get_attribute("href") or ""
+                    raw_href = fancybox.get_attribute("href") or ""
+                    pointable_tile = item.locator("div.tile.pointable, div.tile").first
+                    style_attr = pointable_tile.get_attribute("style") or "" if pointable_tile.count() > 0 else ""
                     
-                    # Video post handling (rule 2.C in AGENTS.md)
-                    if href.startswith("#") or "obj_attachment" not in href:
-                        pointable_tile = item.locator("div.tile.pointable").first
-                        style = pointable_tile.get_attribute("style") or "" if pointable_tile.count() > 0 else ""
-                        match = re.search(r'url\([\'"]?([^\'"]+)[\'"]?\)', style)
-                        if match:
-                            href = match[1]
-                            
-                    m_obj = re.search(r'obj=([^&]+)', href)
-                    if not m_obj:
+                    obj_id, is_video, resolved_url = extract_obj_id_from_url_or_style(raw_href, style_attr)
+                    if not obj_id:
                         continue
-                    obj_id = m_obj.group(1)
                     
                     # Check incremental sync stop condition
                     existing_entry = False
@@ -993,23 +988,26 @@ class ScraperJob:
                         self.log(f"Post date {date_str} is before custom start date {self.start_date}. Skipping.")
                         continue
                         
-                    # Extract full res URL
-                    download_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={obj_id}&key={obj_id}"
-                    
-                    # Parse date overlay
-                    overlay_span = item.locator("span.name span").first
-                    date_text = overlay_span.inner_text().strip() if overlay_span.count() > 0 else ""
-                    date_str = parse_date(date_text, tf_text)
+                    # Extract full res URL while preserving exact query string parameters (&key=...)
+                    resolved_clean = html.unescape(resolved_url).strip()
+                    if resolved_clean.startswith("http"):
+                        download_url = resolved_clean
+                    elif resolved_clean.startswith("/"):
+                        download_url = f"https://mybrightday.brighthorizons.com{resolved_clean}"
+                    else:
+                        download_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={obj_id}&key={obj_id}"
                     
                     # Fetch file bytes via Playwright request with 120s timeout & retries
                     file_bytes = None
-                    mime_type = "image/jpeg"
+                    mime_type = "video/mp4" if is_video else "image/jpeg"
                     for attempt in range(3):
                         try:
                             response = page.request.get(download_url, timeout=120000)
                             if response.status == 200:
                                 file_bytes = response.body()
-                                mime_type = response.headers.get("content-type", "image/jpeg")
+                                header_mime = response.headers.get("content-type", "")
+                                if header_mime and "text/html" not in header_mime:
+                                    mime_type = header_mime
                                 break
                             elif response.status in [401, 403]:
                                 self.log(f"HTTP {response.status} when fetching obj_id {obj_id[:8]}... Session may be invalid.")
