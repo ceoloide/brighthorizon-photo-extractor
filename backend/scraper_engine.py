@@ -14,6 +14,7 @@ from typing import Dict, Any, List, Callable, Optional, Tuple
 from zoneinfo import ZoneInfo
 from playwright.sync_api import sync_playwright, BrowserContext, Page
 from backend.database import TenantStorage
+from backend.security_isolation import clean_user_data_locks as _clean_user_data_locks
 
 FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://192.168.1.176:8191/v1")
 
@@ -41,15 +42,42 @@ def capture_compressed_b64_frame(page: Page, width=1280, height=720) -> Optional
 
 def clean_user_data_locks(user_data_dir: str):
     """Safely removes stale Chromium Singleton lock files to prevent browser launch crashes."""
-    if not os.path.exists(user_data_dir):
-        return
-    for root, dirs, files in os.walk(user_data_dir):
-        for fname in files:
-            if "Singleton" in fname or fname == "RunningChromeVersion":
-                try:
-                    os.remove(os.path.join(root, fname))
-                except Exception:
-                    pass
+    return _clean_user_data_locks(user_data_dir)
+
+def launch_stealth_persistent_context(playwright_instance, user_data_dir: str, extra_args: list = None, **kwargs):
+    """Launches a persistent browser context targeting real system Chrome with anti-bot masking flags."""
+    clean_user_data_locks(user_data_dir)
+    args = [
+        "--disable-blink-features=AutomationControlled",
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--window-size=1280,720"
+    ]
+    if extra_args:
+        args.extend(extra_args)
+
+    context_kwargs = {
+        "user_data_dir": user_data_dir,
+        "headless": False,
+        "args": args,
+        "ignore_default_args": ["--enable-automation"],
+        "viewport": {"width": 1280, "height": 720}
+    }
+    context_kwargs.update(kwargs)
+
+    # Try launching real system Chrome executable or channel
+    if os.path.exists("/usr/bin/google-chrome"):
+        context_kwargs["executable_path"] = "/usr/bin/google-chrome"
+    else:
+        context_kwargs["channel"] = "chrome"
+
+    try:
+        return playwright_instance.chromium.launch_persistent_context(**context_kwargs)
+    except Exception:
+        # Fallback to Playwright Chromium binary if system Chrome channel is absent
+        context_kwargs.pop("executable_path", None)
+        context_kwargs.pop("channel", None)
+        return playwright_instance.chromium.launch_persistent_context(**context_kwargs)
 
 class ScraperJob:
     def __init__(self, tenant_storage: TenantStorage, password: str, options: Dict[str, Any], log_callback: Optional[Callable[[str], None]] = None):
@@ -171,24 +199,12 @@ class ScraperJob:
         try:
             ensure_xvfb_display()
             with sync_playwright() as p:
-                browser = p.chromium.launch(
-                    headless=False,
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--no-sandbox",
-                        "--disable-dev-shm-usage"
-                    ]
+                context: BrowserContext = launch_stealth_persistent_context(
+                    p,
+                    user_data_dir,
+                    user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
                 )
-                
-                context_kwargs = {
-                    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-                }
-                if os.path.exists(state_file):
-                    context_kwargs["storage_state"] = state_file
-                    self.log("Loaded storage_state.json (cookies & localStorage) into extraction session.")
-
-                context: BrowserContext = browser.new_context(**context_kwargs)
-                page: Page = context.new_page()
+                page: Page = context.pages[0] if context.pages else context.new_page()
                 self._active_page = page
                 
                 # Check existing authentication state
@@ -202,7 +218,6 @@ class ScraperJob:
                 else:
                     self.log("Saved session expired or missing; purging session state...")
                     context.close()
-                    browser.close()
                     self._active_page = None
                     self.tenant_storage.clear_session()
                     raise Exception("Session expired or invalid. Please re-authenticate and provide fresh session cookies.")
@@ -496,26 +511,16 @@ class ScraperJob:
         ensure_xvfb_display(1280, 720)
         
         with sync_playwright() as p:
-            args = [
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--window-size=1280,720"
-            ]
-            
-            try:
-                browser = p.chromium.launch(headless=False, channel="chrome", args=args, ignore_default_args=["--enable-automation"])
-            except Exception:
-                browser = p.chromium.launch(headless=False, args=args, ignore_default_args=["--enable-automation"])
-                
-            context = browser.new_context(storage_state=state_file, viewport={"width": 1280, "height": 720})
-            page = context.new_page()
+            context = launch_stealth_persistent_context(p, user_data_dir)
+            page = context.pages[0] if context.pages else context.new_page()
             self._active_page = page
             
             self.log("Navigating to https://mybrightday.brighthorizons.com/dashboard/parents.html...")
             page.goto("https://mybrightday.brighthorizons.com/dashboard/parents.html", wait_until="domcontentloaded")
             
-            time.sleep(3.0)
+            # My Bright Day loading takes 10-15s before elements render
+            self.log("Waiting for My Bright Day dashboard assets to load...")
+            time.sleep(12.0)
             self.latest_preview_b64 = capture_compressed_b64_frame(page, 1280, 720)
             
             current_url = page.url
