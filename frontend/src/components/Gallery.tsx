@@ -22,8 +22,8 @@ export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
   const [selectedChild, setSelectedChild] = useState<string>('all');
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null);
 
-  const fetchMedia = async () => {
-    setLoading(true);
+  const fetchMedia = async (isInitial: boolean = false) => {
+    if (isInitial) setLoading(true);
     try {
       const res = await fetch('/api/media', {
         headers: { Authorization: `Bearer ${token}` }
@@ -40,7 +40,7 @@ export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
   };
 
   useEffect(() => {
-    fetchMedia();
+    fetchMedia(mediaList.length === 0);
   }, [refreshTrigger, token]);
 
   const childrenOptions = Array.from(new Set(mediaList.map((m) => m.child)));

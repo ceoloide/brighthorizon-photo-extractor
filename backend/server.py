@@ -401,18 +401,21 @@ def list_media(tenant: TenantStorage = Depends(get_current_tenant)):
     return {"status": "success", "count": len(items), "media": items}
 
 @app.get("/api/media/{media_id}")
-def get_media(media_id: str, token: Optional[str] = None, authorization: Optional[str] = Header(None)):
-    # Support token in query string for <img> tags
+def get_media(media_id: str, request: Request, token: Optional[str] = None, authorization: Optional[str] = Header(None)):
+    # Support token in query string, Authorization header, or HTTP-only cookie
     auth_token = token
     if not auth_token and authorization and authorization.startswith("Bearer "):
         auth_token = authorization.split(" ")[1]
         
-    if not auth_token:
-        raise HTTPException(status_code=401, detail="Authentication token required")
-        
-    payload = verify_jwt_token(auth_token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    payload = verify_jwt_token(auth_token) if auth_token else None
+    
+    if not payload or not payload.get("email"):
+        cookie_token = request.cookies.get("bh_tenant_token")
+        if cookie_token:
+            payload = verify_jwt_token(cookie_token)
+            
+    if not payload or not payload.get("email"):
+        raise HTTPException(status_code=401, detail="Authentication token required or invalid session")
         
     tenant = TenantStorage(payload["email"])
     file_info = tenant.get_media_file_path(media_id)
