@@ -15,7 +15,10 @@ import html
 from zoneinfo import ZoneInfo
 from playwright.sync_api import sync_playwright, BrowserContext, Page
 from backend.database import TenantStorage
-from backend.dom_parser import extract_obj_id_from_url_or_style
+try:
+    from backend.dom_parser import extract_obj_id_from_url_or_style
+except ImportError:
+    from dom_parser import extract_obj_id_from_url_or_style
 
 FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://192.168.1.176:8191/v1")
 
