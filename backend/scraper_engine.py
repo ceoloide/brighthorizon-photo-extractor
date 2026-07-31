@@ -631,39 +631,19 @@ class ScraperJob:
                 "--window-size=1280,720"
             ]
             context_kwargs = {
+                "user_data_dir": user_data_dir,
+                "executable_path": "/usr/bin/google-chrome-stable" if os.path.exists("/usr/bin/google-chrome-stable") else None,
+                "headless": False,
                 "args": args,
-                "ignore_default_args": ["--enable-automation"],
-                "headless": False
+                "ignore_default_args": ["--enable-automation"]
             }
-            if solver_ua:
-                context_kwargs["user_agent"] = solver_ua
-            else:
-                context_kwargs["user_agent"] = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+            # Remove None values
+            context_kwargs = {k: v for k, v in context_kwargs.items() if v is not None}
                 
-            context: BrowserContext = p.chromium.launch_persistent_context(
-                user_data_dir,
-                **context_kwargs
-            )
-            
-            if clearance_cookies:
-                formatted_cookies = []
-                for c in clearance_cookies:
-                    formatted_cookies.append({
-                        "name": c["name"],
-                        "value": c["value"],
-                        "domain": c["domain"],
-                        "path": c.get("path", "/"),
-                        "secure": c.get("secure", False)
-                    })
-                context.add_cookies(formatted_cookies)
+            context: BrowserContext = p.chromium.launch_persistent_context(**context_kwargs)
             
             page: Page = context.new_page()
             self._active_page = page
-            try:
-                from playwright_stealth import Stealth
-                Stealth().apply_stealth_sync(page)
-            except Exception as e:
-                self.log(f"Stealth application notice: {e}")
             
             try:
                 self.log("Navigating to portal and authenticating credentials...")
