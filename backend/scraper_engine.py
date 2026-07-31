@@ -14,19 +14,8 @@ from typing import Dict, Any, List, Callable, Optional, Tuple
 import html
 from zoneinfo import ZoneInfo
 from playwright.sync_api import sync_playwright, BrowserContext, Page
-try:
-    from backend.database import TenantStorage
-except (ImportError, ModuleNotFoundError):
-    from database import TenantStorage
-
-try:
-    from backend.dom_parser import extract_obj_id_from_url_or_style
-except (ImportError, ModuleNotFoundError):
-    try:
-        from dom_parser import extract_obj_id_from_url_or_style
-    except (ImportError, ModuleNotFoundError):
-        sys.path.append(os.path.dirname(__file__))
-        from dom_parser import extract_obj_id_from_url_or_style
+from backend.database import TenantStorage
+from backend.dom_parser import extract_obj_id_from_url_or_style
 
 FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://192.168.1.176:8191/v1")
 
