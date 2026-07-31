@@ -352,13 +352,53 @@ class ScraperJob:
 
         return "unknown"
 
-    def wait_for_manual_step(self, step_name: str, step_idx: int, update_cb: Optional[Callable[[str, int], None]] = None):
-        """Pauses execution until user clicks Next in UI (10 min timeout)."""
-        if update_cb:
-            update_cb(step_name, step_idx)
-        self._step_event.clear()
-        self.log(f"Paused at step: '{step_name}'. Waiting for user to click Next in UI...")
-        self._step_event.wait(timeout=600)
+    def solve_and_wait_turnstile(self, page: Page, max_wait_sec: int = 50, update_progress_cb: Optional[Callable[[str, int], None]] = None) -> bool:
+        """
+        Triggers Turnstile frame verification click and dynamically polls DOM for 'Success!' / 'success'
+        for up to max_wait_sec (doubled timeout).
+        """
+        self.log(f"Waiting for Cloudflare Turnstile verification (up to {max_wait_sec}s)...")
+        if update_progress_cb:
+            update_progress_cb("Waiting for Cloudflare security check...", 2)
+
+        has_clicked = False
+        start_t = time.time()
+        while time.time() - start_t < max_wait_sec:
+            # Inspect overall page body & frame text for 'Success!' verification
+            full_text = ""
+            try:
+                full_text = page.locator("body").inner_text().lower()
+            except Exception:
+                pass
+
+            frame_texts = ""
+            for f in page.frames:
+                try:
+                    frame_texts += " " + f.locator("body").inner_text().lower()
+                except Exception:
+                    pass
+
+            combined = full_text + " " + frame_texts
+            if "success!" in combined or "success" in combined or "verified" in combined:
+                self.log(f"🎉 Cloudflare Turnstile dynamically verified ('Success!') after {int(time.time() - start_t)}s!")
+                return True
+
+            # Trigger Turnstile click if challenge frame is present and not yet clicked
+            if not has_clicked:
+                for frame in page.frames:
+                    if "challenges.cloudflare.com" in frame.url:
+                        self.log("Cloudflare Turnstile frame detected. Sending verification click...")
+                        try:
+                            frame.click("body", position={"x": 30, "y": 30})
+                            has_clicked = True
+                            page.wait_for_timeout(3000)
+                        except Exception as e:
+                            self.log(f"Turnstile click note: {e}")
+
+            page.wait_for_timeout(1000)
+
+        self.log(f"Turnstile wait finished after {max_wait_sec}s. Proceeding to submit...")
+        return False
 
     def perform_login(self, page: Page, update_progress_cb: Optional[Callable[[str, int], None]] = None):
         """Ultra-robust login handler following the exact Bright Horizons & Auth0 SSO authentication sequence."""
@@ -389,7 +429,7 @@ class ScraperJob:
             
             if state == "auth0_username":
                 username_inp = page.locator("input[name='username'], input[id='username'], input[type='email']").first
-                username_inp.wait_for(state="visible", timeout=25000)
+                username_inp.wait_for(state="visible", timeout=50000)
                 
                 # Step 2: Type email address
                 self.log("Typing email address into SSO username input...")
@@ -398,15 +438,8 @@ class ScraperJob:
                 self.human_type(page, username_inp, self.email)
                 page.wait_for_timeout(1000)
 
-                # Solve Cloudflare Turnstile if frame present (container-verified frame click)
-                for frame in page.frames:
-                    if "challenges.cloudflare.com" in frame.url:
-                        self.log("Solving Cloudflare Turnstile challenge...")
-                        try:
-                            frame.click("body", position={"x": 30, "y": 30})
-                            page.wait_for_timeout(3000)
-                        except Exception as e:
-                            self.log(f"Turnstile note: {e}")
+                # Dynamically solve & wait for Cloudflare Turnstile "Success!" (50s doubled timeout)
+                self.solve_and_wait_turnstile(page, max_wait_sec=50, update_progress_cb=update_progress_cb)
 
                 cont_btn = page.locator("button[data-action-button-primary='true'], button._button-login-id, button[type='submit']:not(.ulp-hidden-form-submit-button), button:has-text('Continue')").first
                 self.log("Clicking Continue button...")
@@ -415,25 +448,19 @@ class ScraperJob:
                 else:
                     username_inp.press("Enter")
                     
-                page.wait_for_timeout(4000)
+                page.wait_for_timeout(8000)
 
             # Step 3: Type password & submit
             pwd_inp = page.locator("input[name='password']:not(.hide), input[id='password']").first
-            pwd_inp.wait_for(state="visible", timeout=25000)
+            pwd_inp.wait_for(state="visible", timeout=50000)
             
             self.log("Filling password...")
             if update_progress_cb: update_progress_cb("Submitting password...", 2)
             self.human_type(page, pwd_inp, self.password)
             page.wait_for_timeout(500)
 
-            # Solve Turnstile on password step if frame present
-            for frame in page.frames:
-                if "challenges.cloudflare.com" in frame.url:
-                    try:
-                        frame.click("body", position={"x": 30, "y": 30})
-                        page.wait_for_timeout(3000)
-                    except Exception:
-                        pass
+            # Dynamically solve & wait for Turnstile on password step if present
+            self.solve_and_wait_turnstile(page, max_wait_sec=50, update_progress_cb=update_progress_cb)
             
             login_btn = page.locator("button[data-action-button-primary='true'], button[type='submit']:not(.ulp-hidden-form-submit-button), button:has-text('Log In'), button:has-text('Sign In')").first
             if login_btn.count() > 0 and login_btn.is_visible():
@@ -442,7 +469,7 @@ class ScraperJob:
                 pwd_inp.press("Enter")
                 
             self.log("Waiting for post-login redirection or MFA challenge...")
-            page.wait_for_timeout(4000)
+            page.wait_for_timeout(8000)
             
             # Step 5: Email Verification Code (MFA) & "Remember this device for 30 days"
             state = self.detect_page_state(page, max_wait_sec=10)
