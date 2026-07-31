@@ -357,9 +357,23 @@ class ScraperJob:
     def solve_and_wait_turnstile(self, page: Page, max_wait_sec: int = 50, update_progress_cb: Optional[Callable[[str, int], None]] = None) -> bool:
         """
         Monitors Cloudflare Turnstile verification via token presence and text signals.
-        Logs detailed DOM & iframe state without exposing credentials.
-        Fails strictly only if Turnstile remains genuinely unsolved after max_wait_sec.
+        Exits immediately if no Turnstile challenge is present on the page or upon verification.
         """
+        # Fast pre-check: return immediately if no Turnstile challenge widget exists on page
+        has_turnstile = False
+        try:
+            has_turnstile = page.evaluate("""() => {
+                const iframe = document.querySelector("iframe[src*='challenges.cloudflare.com']");
+                const input = document.querySelector("input[name='cf-turnstile-response'], input[name='g-recaptcha-response']");
+                return !!(iframe || input);
+            }""")
+        except Exception:
+            pass
+
+        if not has_turnstile:
+            self.log("[Turnstile] No Turnstile widget detected on current step. Advancing immediately.")
+            return True
+
         self.log(f"[Turnstile] Monitoring Turnstile security check (timeout: {max_wait_sec}s)...")
         if update_progress_cb:
             update_progress_cb("Waiting for Cloudflare security check...", 2)
@@ -428,14 +442,13 @@ class ScraperJob:
                     try:
                         cf_frame.click("body", position={"x": 30, "y": 30})
                         last_click_t = time.time()
-                        page.wait_for_timeout(1500)
+                        page.wait_for_timeout(1000)
                     except Exception as e:
                         self.log(f"[Turnstile] Click note: {e}")
 
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(250)
 
         # 5. Post-timeout strict failure assessment
-        # Re-check token one final time
         try:
             token_populated = page.evaluate("""() => {
                 const inputs = document.querySelectorAll("input[name='cf-turnstile-response'], input[name='g-recaptcha-response']");
@@ -491,9 +504,8 @@ class ScraperJob:
         self._active_page = page
         self.log("Navigating to familyinfocenter.brighthorizons.com/okta/login...")
         page.goto("https://familyinfocenter.brighthorizons.com/okta/login", wait_until="domcontentloaded")
-        page.wait_for_timeout(2500)
         
-        state = self.detect_page_state(page, max_wait_sec=35)
+        state = self.detect_page_state(page, max_wait_sec=15)
         self.log(f"Detected page state: '{state}' (URL: {page.url})")
         
         if state == "authenticated":
@@ -507,7 +519,7 @@ class ScraperJob:
             btn = page.locator("button:has-text('Log In'), a:has-text('Log In'), button:has-text('Sign In'), a:has-text('Sign In')").first
             btn.click()
             page.wait_for_load_state("domcontentloaded")
-            state = self.detect_page_state(page, max_wait_sec=35)
+            state = self.detect_page_state(page, max_wait_sec=15)
             self.log(f"Post-click page state: '{state}' (URL: {page.url})")
 
         if state in ["auth0_username", "auth0_password"]:
@@ -515,7 +527,7 @@ class ScraperJob:
             
             if state == "auth0_username":
                 username_inp = page.locator("input[name='username'], input[id='username'], input[type='email']").first
-                username_inp.wait_for(state="visible", timeout=50000)
+                username_inp.wait_for(state="visible", timeout=30000)
                 
                 # Step 2: Solve & confirm Cloudflare Turnstile verification FIRST
                 if not self.solve_and_wait_turnstile(page, max_wait_sec=50, update_progress_cb=update_progress_cb):
@@ -526,7 +538,6 @@ class ScraperJob:
                 if update_progress_cb: update_progress_cb("Typing email address...", 2)
                 
                 self.human_type(page, username_inp, self.email)
-                page.wait_for_timeout(1000)
 
                 cont_btn = page.locator("button[data-action-button-primary='true'], button._button-login-id, button[type='submit']:not(.ulp-hidden-form-submit-button), button:has-text('Continue')").first
                 self.log("Clicking Continue button...")
@@ -539,20 +550,23 @@ class ScraperJob:
                     self.log(f"Continue button click note: {e}, falling back to Enter key press...")
                     username_inp.press("Enter")
                     
-                page.wait_for_timeout(4000)
+                # Dynamically wait for password input or error message
+                try:
+                    page.locator("input[name='password']:not(.hide), input[id='password'], span#error-element-username, div#error-element-username, .ulp-input-error-message").first.wait_for(state="visible", timeout=12000)
+                except Exception:
+                    pass
                 self.check_auth0_errors(page)
 
             # Step 3: Type password & submit
             pwd_inp = page.locator("input[name='password']:not(.hide), input[id='password']").first
-            pwd_inp.wait_for(state="visible", timeout=50000)
+            pwd_inp.wait_for(state="visible", timeout=30000)
             
             self.log("Filling password...")
             if update_progress_cb: update_progress_cb("Submitting password...", 2)
             self.human_type(page, pwd_inp, self.password)
-            page.wait_for_timeout(500)
 
-            # Dynamically solve & wait for Turnstile on password step if present
-            self.solve_and_wait_turnstile(page, max_wait_sec=50, update_progress_cb=update_progress_cb)
+            # Fast Turnstile check (returns in 0.01s if no Turnstile challenge is present on password step)
+            self.solve_and_wait_turnstile(page, max_wait_sec=10, update_progress_cb=update_progress_cb)
             
             login_btn = page.locator("button[data-action-button-primary='true'], button[type='submit']:not(.ulp-hidden-form-submit-button), button:has-text('Log In'), button:has-text('Sign In')").first
             self.log("Clicking Log In / Submit button...")
@@ -566,11 +580,17 @@ class ScraperJob:
                 pwd_inp.press("Enter")
                 
             self.log("Waiting for post-login redirection or MFA challenge...")
-            page.wait_for_timeout(4000)
+            
+            # Dynamically wait for post-login redirection or MFA prompt
+            try:
+                page.locator("input[name='code'], span:has-text('Actions'), h1, span#error-element-password, div.alert-danger").first.wait_for(state="visible", timeout=15000)
+            except Exception:
+                pass
+                
             self.check_auth0_errors(page)
             
             # Step 5: Email Verification Code (MFA) & "Remember this device for 30 days"
-            state = self.detect_page_state(page, max_wait_sec=10)
+            state = self.detect_page_state(page, max_wait_sec=5)
             mfa_inp_check = page.locator("input[name='code'], input[id='code']")
             body_text = page.locator("body").inner_text()
             if "Verify your identity" in body_text or state == "auth0_mfa" or "mfa" in page.url.lower() or (mfa_inp_check.count() > 0 and mfa_inp_check.first.is_visible()):
@@ -602,7 +622,6 @@ class ScraperJob:
                 mfa_inp = page.locator("input[name='code'], input[id='code'], input[type='text']").first
                 mfa_inp.wait_for(state="visible", timeout=10000)
                 self.human_type(page, mfa_inp, code_to_submit)
-                page.wait_for_timeout(500)
                 
                 submit_mfa_btn = page.locator("button[type='submit']:not(.ulp-hidden-form-submit-button), button[name='action'], button:has-text('Continue'), button:has-text('Verify')").first
                 if submit_mfa_btn.count() > 0 and submit_mfa_btn.is_visible():
@@ -610,17 +629,19 @@ class ScraperJob:
                 else:
                     mfa_inp.press("Enter")
                     
-                page.wait_for_timeout(5000)
+                try:
+                    page.locator("span:has-text('Actions'), h1, span#error-element-password").first.wait_for(state="visible", timeout=15000)
+                except Exception:
+                    pass
                 self.check_auth0_errors(page)
                 self.status["state"] = "running"
                 
-            # Step 6: Verify portal home page load & child profiles ("Byron")
+            # Step 6: Verify portal home page load
             self.log("Waiting for post-login redirection to portal home...")
             try:
-                page.wait_for_selector("span:has-text('Actions'), h1:has-text('Byron')", timeout=35000)
+                page.wait_for_selector("span:has-text('Actions'), h1", timeout=20000)
             except Exception:
                 pass
-            page.wait_for_timeout(2000)
             
             # Final check for error elements on SSO form
             self.check_auth0_errors(page)
