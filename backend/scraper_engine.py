@@ -508,12 +508,16 @@ class ScraperJob:
 
                 cont_btn = page.locator("button[data-action-button-primary='true'], button._button-login-id, button[type='submit']:not(.ulp-hidden-form-submit-button), button:has-text('Continue')").first
                 self.log("Clicking Continue button...")
-                if cont_btn.count() > 0 and cont_btn.is_visible():
-                    cont_btn.click(force=True)
-                else:
+                try:
+                    if cont_btn.count() > 0 and cont_btn.is_visible():
+                        cont_btn.click()
+                    else:
+                        username_inp.press("Enter")
+                except Exception as e:
+                    self.log(f"Continue button click note: {e}, falling back to Enter key press...")
                     username_inp.press("Enter")
                     
-                page.wait_for_timeout(8000)
+                page.wait_for_timeout(6000)
 
             # Step 3: Type password & submit
             pwd_inp = page.locator("input[name='password']:not(.hide), input[id='password']").first
@@ -528,9 +532,14 @@ class ScraperJob:
             self.solve_and_wait_turnstile(page, max_wait_sec=50, update_progress_cb=update_progress_cb)
             
             login_btn = page.locator("button[data-action-button-primary='true'], button[type='submit']:not(.ulp-hidden-form-submit-button), button:has-text('Log In'), button:has-text('Sign In')").first
-            if login_btn.count() > 0 and login_btn.is_visible():
-                login_btn.click(force=True)
-            else:
+            self.log("Clicking Log In / Submit button...")
+            try:
+                if login_btn.count() > 0 and login_btn.is_visible():
+                    login_btn.click()
+                else:
+                    pwd_inp.press("Enter")
+            except Exception as e:
+                self.log(f"Log In button click note: {e}, falling back to Enter key press...")
                 pwd_inp.press("Enter")
                 
             self.log("Waiting for post-login redirection or MFA challenge...")
