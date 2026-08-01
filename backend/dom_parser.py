@@ -169,35 +169,22 @@ def parse_date_overlay(date_text: str, timeframe_year: Optional[int] = None) -> 
     return fallback_date
 
 
-def extract_obj_id_from_url_or_style(href: str, style: str) -> Tuple[Optional[str], bool, str]:
+def extract_obj_id_from_url_or_style(href: str = "", style: str = "") -> Tuple[Optional[str], bool, str]:
     """
-    Parses obj_id, video indicator, and resolved URL from fancybox href or tile style.
-    Handles HTML entities (e.g., &amp; -> &, &quot; -> ") and video CSS background-image fallback (Rule 2.C).
-
-    For video posts, a.fancybox has href="#<video_obj_id>-default". The video object ID is extracted
-    directly from the href fragment anchor so the actual MP4 video file is downloaded instead of the JPEG thumbnail.
-
+    Extracts attachment obj_id, is_video boolean flag, and resolved_url from a post tile.
+    
     Returns: (obj_id, is_video, resolved_url)
     """
     href_clean = html.unescape(href.strip()) if href else ""
     style_clean = html.unescape(style.strip()) if style else ""
+    is_video = href_clean.startswith("#") or not href_clean or ("obj_attachment" not in href_clean and "obj=" not in href_clean)
 
-    # 1. Check if href is a video post fragment anchor (e.g. #6986168d2bb117b0dc910b3b-default)
-    if href_clean.startswith("#"):
-        frag = href_clean.lstrip("#")
-        m_frag = re.search(r'([a-f0-9]{12,64})', frag, re.IGNORECASE)
-        if m_frag:
-            video_obj_id = m_frag.group(1)
-            video_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={video_obj_id}&key={video_obj_id}"
-            return video_obj_id, True, video_url
-
-    # 2. Check if href is a direct obj_attachment URL
+    # 1. Check if href is a direct obj_attachment URL (standard photo posts)
     m_href_obj = re.search(r'obj=([^&#]+)', href_clean)
-    if m_href_obj:
+    if m_href_obj and not href_clean.startswith("#"):
         return m_href_obj.group(1), False, href_clean
 
-    # 3. Fallback: Parse CSS background-image url(...) from tile style
-    is_video = href_clean.startswith("#") or not href_clean or ("obj_attachment" not in href_clean and "obj=" not in href_clean)
+    # 2. Check CSS background-image url(...) from tile style (video posts / tile thumbnails)
     urls = []
     for match in re.finditer(r'url\(\s*[\'"]?([^\'"\)]+)[\'"]?\s*\)', style_clean, re.IGNORECASE):
         raw_u = match.group(1).strip()
@@ -209,8 +196,20 @@ def extract_obj_id_from_url_or_style(href: str, style: str) -> Tuple[Optional[st
         if "obj_attachment" in u or "obj=" in u:
             target_url = u
             break
-    if not target_url and urls:
-        target_url = urls[0]
+            
+    if target_url:
+        match_obj = re.search(r'obj=([^&#]+)', target_url)
+        if match_obj:
+            return match_obj.group(1), is_video, target_url
+
+    # 3. Fallback: video post fragment anchor (e.g. #6986168d2bb117b0dc910b3b-default)
+    if href_clean.startswith("#"):
+        frag = href_clean.lstrip("#")
+        m_frag = re.search(r'([a-f0-9]{12,64})', frag, re.IGNORECASE)
+        if m_frag:
+            video_obj_id = m_frag.group(1)
+            video_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={video_obj_id}&key={video_obj_id}"
+            return video_obj_id, True, video_url
 
     resolved_url = target_url or href_clean
     match_obj = re.search(r'obj=([^&#]+)', resolved_url)

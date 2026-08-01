@@ -1094,15 +1094,29 @@ class ScraperJob:
                     self.log(f"Failed parsing item: {item_err}")
 
     def scroll_and_load(self, page: Page):
-        """Scrolls feed down iteratively to trigger lazy loading."""
-        for _ in range(3):
+        """Scrolls feed down iteratively until no new feed posts are loaded."""
+        timeline = page.locator("div.well.left-panel.pull-left")
+        prev_count = 0
+        stable_iterations = 0
+        
+        for iteration in range(40):
             page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-            page.wait_for_timeout(2000)
-            # Shake scroll
+            page.wait_for_timeout(1500)
             page.evaluate("window.scrollBy(0, -600);")
-            page.wait_for_timeout(500)
+            page.wait_for_timeout(400)
             page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(1500)
+            
+            feed_items = timeline.locator("ul.thumbnails li").all() if timeline.count() > 0 else page.locator("ul.thumbnails li").all()
+            curr_count = len(feed_items)
+            if curr_count == prev_count and curr_count > 0:
+                stable_iterations += 1
+                if stable_iterations >= 3:
+                    self.log(f"Feed scrolling stabilized at {curr_count} posts after {iteration + 1} iterations.")
+                    break
+            else:
+                stable_iterations = 0
+                prev_count = curr_count
 
 def parse_date(date_text: str, timeframe_text: str) -> str:
     """Parses date string into YYYY-MM-DD format using timeframe_text year context."""
