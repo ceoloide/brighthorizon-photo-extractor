@@ -128,6 +128,19 @@ class TenantStorage:
             
         with open(abs_storage_path, "wb") as f:
             f.write(file_bytes)
+
+        # Generate & save 400x400 square thumbnail
+        is_vid = mime_type.startswith("video") or original_filename.lower().endswith((".mp4", ".mov", ".avi", ".mkv", ".webm"))
+        rel_thumb_path = os.path.join("media", f"{media_id}_thumb.dat")
+        abs_thumb_path = os.path.abspath(os.path.join(self.tenant_dir, rel_thumb_path))
+        try:
+            from backend.thumbnail import generate_square_thumbnail
+            thumb_bytes = generate_square_thumbnail(file_bytes, is_video=is_vid)
+            if thumb_bytes:
+                with open(abs_thumb_path, "wb") as tf:
+                    tf.write(thumb_bytes)
+        except Exception as e:
+            print(f"[Thumbnail Notice] Error generating thumbnail on save for {media_id}: {e}")
             
         entry = {
             "media_id": media_id,
@@ -140,7 +153,8 @@ class TenantStorage:
             "comment": comment,
             "mime_type": mime_type,
             "file_size": len(file_bytes),
-            "storage_path": rel_storage_path
+            "storage_path": rel_storage_path,
+            "thumb_path": rel_thumb_path
         }
         
         manifest[media_id] = entry
@@ -163,3 +177,45 @@ class TenantStorage:
         if not os.path.exists(abs_path):
             return None
         return abs_path, item.get("mime_type", "image/jpeg"), item.get("original_filename", "photo.jpg")
+
+    def get_media_thumbnail_bytes(self, media_id: str) -> Optional[bytes]:
+        """
+        Returns the 400x400 square JPEG thumbnail bytes for media_id.
+        If thumbnail does not exist on disk, generates it on-the-fly from original media file.
+        """
+        manifest = self.load_manifest()
+        item = manifest.get(media_id)
+        if not item or "storage_path" not in item:
+            return None
+
+        rel_thumb_path = item.get("thumb_path") or os.path.join("media", f"{media_id}_thumb.dat")
+        abs_thumb_path = os.path.abspath(os.path.join(self.tenant_dir, rel_thumb_path))
+
+        if os.path.exists(abs_thumb_path):
+            try:
+                with open(abs_thumb_path, "rb") as f:
+                    return f.read()
+            except Exception:
+                pass
+
+        # Fallback: Read original file and generate thumbnail on-the-fly
+        res = self.get_media_file_path(media_id)
+        if not res:
+            return None
+        abs_orig_path, mime_type, orig_filename = res
+        try:
+            with open(abs_orig_path, "rb") as f:
+                orig_bytes = f.read()
+            from backend.thumbnail import generate_square_thumbnail
+            is_vid = mime_type.startswith("video") or orig_filename.lower().endswith((".mp4", ".mov", ".avi", ".mkv", ".webm"))
+            thumb_bytes = generate_square_thumbnail(orig_bytes, is_video=is_vid)
+            if thumb_bytes:
+                try:
+                    with open(abs_thumb_path, "wb") as tf:
+                        tf.write(thumb_bytes)
+                except Exception:
+                    pass
+                return thumb_bytes
+        except Exception as e:
+            print(f"[Thumbnail Error] On-the-fly thumbnail fallback failed for {media_id}: {e}")
+        return None

@@ -274,6 +274,7 @@ export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
                       {grp.items.map((item) => {
                         const isVideo = isItemVideo(item);
                         const mediaUrl = `/api/media/${item.media_id}?token=${token}`;
+                        const thumbUrl = `/api/media/${item.media_id}?thumb=1&token=${token}`;
                         const isLoaded = !!loadedMedia[item.media_id];
 
                         return (
@@ -294,40 +295,24 @@ export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
                                 </div>
                               )}
 
-                              {isVideo ? (
-                                <>
-                                  <video
-                                    src={`${mediaUrl}#t=0.5`}
-                                    preload="metadata"
-                                    muted
-                                    playsInline
-                                    onLoadedMetadata={() => handleMediaLoaded(item.media_id)}
-                                    onLoadedData={() => handleMediaLoaded(item.media_id)}
-                                    onCanPlay={() => handleMediaLoaded(item.media_id)}
-                                    onSeeked={() => handleMediaLoaded(item.media_id)}
-                                    onError={() => handleMediaLoaded(item.media_id)}
-                                    className={`w-full h-full object-cover group-hover:scale-105 transition-all duration-300 ${
-                                      isLoaded ? 'opacity-100' : 'opacity-80'
-                                    }`}
-                                  />
-                                  <div className="absolute top-2 right-2 z-10">
-                                    <span className="text-[9px] sm:text-[10px] font-mono font-bold uppercase bg-slate-900/80 backdrop-blur-xs text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-full shadow-xs flex items-center gap-1">
-                                      <Video className="w-3 h-3 text-indigo-400" />
-                                      VIDEO
-                                    </span>
-                                  </div>
-                                </>
-                              ) : (
-                                <img
-                                  src={mediaUrl}
-                                  alt={item.original_filename}
-                                  loading="lazy"
-                                  decoding="async"
-                                  onLoad={() => handleMediaLoaded(item.media_id)}
-                                  className={`w-full h-full object-cover group-hover:scale-105 transition-all duration-300 ${
-                                    isLoaded ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
-                                  }`}
-                                />
+                              <img
+                                src={thumbUrl}
+                                alt={item.original_filename}
+                                loading="lazy"
+                                decoding="async"
+                                onLoad={() => handleMediaLoaded(item.media_id)}
+                                onError={() => handleMediaLoaded(item.media_id)}
+                                className={`w-full h-full object-cover group-hover:scale-105 transition-all duration-300 ${
+                                  isLoaded ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
+                                }`}
+                              />
+                              {isVideo && (
+                                <div className="absolute top-2 right-2 z-10">
+                                  <span className="text-[9px] sm:text-[10px] font-mono font-bold uppercase bg-slate-900/80 backdrop-blur-xs text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-full shadow-xs flex items-center gap-1">
+                                    <Video className="w-3 h-3 text-indigo-400" />
+                                    VIDEO
+                                  </span>
+                                </div>
                               )}
                               <div className="absolute inset-0 bg-slate-900/30 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center z-20">
                                 <Eye className="w-6 h-6 text-white" />

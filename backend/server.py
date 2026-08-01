@@ -415,7 +415,7 @@ def list_media(tenant: TenantStorage = Depends(get_current_tenant)):
     return {"status": "success", "count": len(items), "media": items}
 
 @app.get("/api/media/{media_id}")
-def get_media(media_id: str, request: Request, token: Optional[str] = None, authorization: Optional[str] = Header(None)):
+def serve_media(media_id: str, request: Request, token: Optional[str] = None, authorization: Optional[str] = Header(None), thumb: bool = False, thumbnail: bool = False):
     auth_token = token
     if not auth_token and authorization and authorization.startswith("Bearer "):
         auth_token = authorization.split(" ")[1]
@@ -429,6 +429,10 @@ def get_media(media_id: str, request: Request, token: Optional[str] = None, auth
             
     if payload and payload.get("email"):
         tenant = TenantStorage(payload["email"])
+        if thumb or thumbnail:
+            thumb_bytes = tenant.get_media_thumbnail_bytes(media_id)
+            if thumb_bytes:
+                return Response(content=thumb_bytes, media_type="image/jpeg")
         file_info = tenant.get_media_file_path(media_id)
         if file_info:
             abs_path, mime_type, orig_filename = file_info
@@ -438,13 +442,20 @@ def get_media(media_id: str, request: Request, token: Optional[str] = None, auth
     if os.path.exists(TENANTS_DIR):
         for tenant_folder in os.listdir(TENANTS_DIR):
             t_dir = os.path.join(TENANTS_DIR, tenant_folder)
-            m_file = os.path.join(t_dir, "manifest.dat")
+            m_file = os.path.join(t_dir, "manifest.enc")
+            if not os.path.exists(m_file):
+                m_file = os.path.join(t_dir, "manifest.dat")
             if os.path.exists(m_file):
                 try:
                     with open(m_file, "r") as f:
                         manifest = decrypt_json(f.read())
                     if media_id in manifest:
                         item = manifest[media_id]
+                        if thumb or thumbnail:
+                            tenant_obj = TenantStorage(tenant_folder)
+                            thumb_bytes = tenant_obj.get_media_thumbnail_bytes(media_id)
+                            if thumb_bytes:
+                                return Response(content=thumb_bytes, media_type="image/jpeg")
                         rel_path = item.get("storage_path")
                         if rel_path:
                             abs_path = os.path.abspath(os.path.join(t_dir, rel_path))
@@ -454,6 +465,10 @@ def get_media(media_id: str, request: Request, token: Optional[str] = None, auth
                     pass
 
     raise HTTPException(status_code=404, detail="Media asset not found or unauthorized")
+
+@app.get("/api/media/{media_id}/thumbnail")
+def serve_media_thumbnail(media_id: str, request: Request, token: Optional[str] = None, authorization: Optional[str] = Header(None)):
+    return serve_media(media_id, request, token=token, authorization=authorization, thumb=True)
 
 # --- Archive & Resumable Downloads ---
 @app.post("/api/archive/create")
