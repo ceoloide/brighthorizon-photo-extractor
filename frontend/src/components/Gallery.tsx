@@ -42,6 +42,13 @@ const formatMonthGroupTitle = (key: string) => {
   return key;
 };
 
+const isItemVideo = (item: MediaItem) => {
+  if (!item) return false;
+  const mime = (item.mime_type || '').toLowerCase();
+  const fn = (item.original_filename || '').toLowerCase();
+  return mime.includes('video') || /\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(fn);
+};
+
 export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
   const [mediaList, setMediaList] = useState<MediaItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -224,9 +231,7 @@ export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
         <div className="space-y-3">
           {groupedMedia.map((grp) => {
             const isOpen = !!openMonths[grp.key];
-            const videoCount = grp.items.filter(
-              (i) => i.mime_type.includes('video') || i.original_filename.endsWith('.mp4') || i.original_filename.endsWith('.mov')
-            ).length;
+            const videoCount = grp.items.filter((i) => isItemVideo(i)).length;
             const photoCount = grp.items.length - videoCount;
 
             return (
@@ -267,10 +272,7 @@ export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
                   <div className="p-3.5 sm:p-4 border-t border-slate-100 bg-slate-50/50">
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2.5 sm:gap-4">
                       {grp.items.map((item) => {
-                        const isVideo =
-                          item.mime_type.includes('video') ||
-                          item.original_filename.endsWith('.mp4') ||
-                          item.original_filename.endsWith('.mov');
+                        const isVideo = isItemVideo(item);
                         const mediaUrl = `/api/media/${item.media_id}?token=${token}`;
                         const isLoaded = !!loadedMedia[item.media_id];
 
@@ -284,7 +286,11 @@ export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
                               {/* Skeleton Animated Placeholder */}
                               {!isLoaded && (
                                 <div className="absolute inset-0 bg-slate-200/90 animate-pulse flex items-center justify-center z-0">
-                                  <ImageIcon className="w-6 h-6 text-slate-400/50 animate-pulse" />
+                                  {isVideo ? (
+                                    <Video className="w-6 h-6 text-indigo-400/60 animate-pulse" />
+                                  ) : (
+                                    <ImageIcon className="w-6 h-6 text-slate-400/50 animate-pulse" />
+                                  )}
                                 </div>
                               )}
 
@@ -295,9 +301,13 @@ export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
                                     preload="metadata"
                                     muted
                                     playsInline
+                                    onLoadedMetadata={() => handleMediaLoaded(item.media_id)}
                                     onLoadedData={() => handleMediaLoaded(item.media_id)}
+                                    onCanPlay={() => handleMediaLoaded(item.media_id)}
+                                    onSeeked={() => handleMediaLoaded(item.media_id)}
+                                    onError={() => handleMediaLoaded(item.media_id)}
                                     className={`w-full h-full object-cover group-hover:scale-105 transition-all duration-300 ${
-                                      isLoaded ? 'opacity-100' : 'opacity-0'
+                                      isLoaded ? 'opacity-100' : 'opacity-80'
                                     }`}
                                   />
                                   <div className="absolute top-2 right-2 z-10">
@@ -373,7 +383,7 @@ export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
             </div>
 
             <div className="p-2 sm:p-4 flex-1 flex items-center justify-center overflow-auto bg-slate-900 min-h-[250px]">
-              {activeItem.mime_type.includes('video') || activeItem.original_filename.endsWith('.mp4') || activeItem.original_filename.endsWith('.mov') ? (
+              {isItemVideo(activeItem) ? (
                 <video
                   src={`/api/media/${activeItem.media_id}?token=${token}`}
                   controls
