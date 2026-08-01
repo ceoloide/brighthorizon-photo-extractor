@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Lock, Mail, ShieldAlert, Heart, Camera } from 'lucide-react';
+import { Lock, Mail, User, ShieldAlert, Heart, Camera } from 'lucide-react';
 import { VerificationInterstitial } from './VerificationInterstitial';
 
 interface LoginFormProps {
@@ -59,15 +59,18 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
             <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-              Bright Horizons Email
+              Email or Mobile Number
             </label>
             <div className="relative">
-              <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
+              <User className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-400" />
               <input
-                type="email"
+                type="text"
+                inputMode="text"
+                autoComplete="username"
+                maxLength={100}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="parent@example.com"
+                placeholder="user@mail.com or +1 123 456 7890"
                 className="w-full pl-10 pr-4 py-3 bg-white border border-slate-300 rounded-xl focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 outline-none text-slate-900 placeholder-slate-400 text-sm transition"
                 required
               />
