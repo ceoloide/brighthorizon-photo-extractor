@@ -11,7 +11,7 @@ FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive \
-    DATA_DIR=/data
+    DATA_DIR=/app/data
 
 WORKDIR /app
 
@@ -55,6 +55,6 @@ COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
 EXPOSE 8095
 
-VOLUME ["/data"]
+VOLUME ["/app/data"]
 
 CMD ["uvicorn", "backend.server:app", "--host", "0.0.0.0", "--port", "8095"]
