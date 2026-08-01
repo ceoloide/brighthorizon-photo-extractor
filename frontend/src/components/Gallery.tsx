@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   Image as ImageIcon,
   Video,
+  Play,
   Calendar,
   Download,
   Eye,
@@ -307,12 +308,19 @@ export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
                                 }`}
                               />
                               {isVideo && (
-                                <div className="absolute top-2 right-2 z-10">
-                                  <span className="text-[9px] sm:text-[10px] font-mono font-bold uppercase bg-slate-900/80 backdrop-blur-xs text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-full shadow-xs flex items-center gap-1">
-                                    <Video className="w-3 h-3 text-indigo-400" />
-                                    VIDEO
-                                  </span>
-                                </div>
+                                <>
+                                  <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
+                                    <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-slate-900/60 backdrop-blur-xs border border-white/40 flex items-center justify-center shadow-lg group-hover:scale-110 group-hover:bg-indigo-600 transition-all duration-300">
+                                      <Play className="w-5 h-5 sm:w-6 sm:h-6 text-white fill-white ml-0.5" />
+                                    </div>
+                                  </div>
+                                  <div className="absolute top-2 right-2 z-10">
+                                    <span className="text-[9px] sm:text-[10px] font-mono font-bold uppercase bg-slate-900/80 backdrop-blur-xs text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-full shadow-xs flex items-center gap-1">
+                                      <Video className="w-3 h-3 text-indigo-400" />
+                                      VIDEO
+                                    </span>
+                                  </div>
+                                </>
                               )}
                               <div className="absolute inset-0 bg-slate-900/30 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center z-20">
                                 <Eye className="w-6 h-6 text-white" />
