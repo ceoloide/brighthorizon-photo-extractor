@@ -48,6 +48,11 @@ export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
   const [selectedChild, setSelectedChild] = useState<string>('all');
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null);
   const [openMonths, setOpenMonths] = useState<Record<string, boolean>>({});
+  const [loadedMedia, setLoadedMedia] = useState<Record<string, boolean>>({});
+
+  const handleMediaLoaded = (id: string) => {
+    setLoadedMedia((prev) => ({ ...prev, [id]: true }));
+  };
 
   const fetchMedia = async (isInitial: boolean = false) => {
     if (isInitial) setLoading(true);
@@ -267,6 +272,7 @@ export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
                           item.original_filename.endsWith('.mp4') ||
                           item.original_filename.endsWith('.mov');
                         const mediaUrl = `/api/media/${item.media_id}?token=${token}`;
+                        const isLoaded = !!loadedMedia[item.media_id];
 
                         return (
                           <div
@@ -274,7 +280,14 @@ export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
                             onClick={() => setActiveItem(item)}
                             className="group relative bg-white rounded-2xl overflow-hidden border border-slate-200 hover:border-indigo-400 transition-all duration-200 cursor-pointer shadow-xs hover:shadow-md flex flex-col active:scale-[0.98]"
                           >
-                            <div className="aspect-square bg-slate-900 relative overflow-hidden flex items-center justify-center">
+                            <div className="aspect-square bg-slate-100 relative overflow-hidden flex items-center justify-center">
+                              {/* Skeleton Animated Placeholder */}
+                              {!isLoaded && (
+                                <div className="absolute inset-0 bg-slate-200/90 animate-pulse flex items-center justify-center z-0">
+                                  <ImageIcon className="w-6 h-6 text-slate-400/50 animate-pulse" />
+                                </div>
+                              )}
+
                               {isVideo ? (
                                 <>
                                   <video
@@ -282,7 +295,10 @@ export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
                                     preload="metadata"
                                     muted
                                     playsInline
-                                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                                    onLoadedData={() => handleMediaLoaded(item.media_id)}
+                                    className={`w-full h-full object-cover group-hover:scale-105 transition-all duration-300 ${
+                                      isLoaded ? 'opacity-100' : 'opacity-0'
+                                    }`}
                                   />
                                   <div className="absolute top-2 right-2 z-10">
                                     <span className="text-[9px] sm:text-[10px] font-mono font-bold uppercase bg-slate-900/80 backdrop-blur-xs text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-full shadow-xs flex items-center gap-1">
@@ -297,10 +313,13 @@ export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
                                   alt={item.original_filename}
                                   loading="lazy"
                                   decoding="async"
-                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                                  onLoad={() => handleMediaLoaded(item.media_id)}
+                                  className={`w-full h-full object-cover group-hover:scale-105 transition-all duration-300 ${
+                                    isLoaded ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
+                                  }`}
                                 />
                               )}
-                              <div className="absolute inset-0 bg-slate-900/30 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center">
+                              <div className="absolute inset-0 bg-slate-900/30 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center z-20">
                                 <Eye className="w-6 h-6 text-white" />
                               </div>
                             </div>
@@ -353,7 +372,7 @@ export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
               </div>
             </div>
 
-            <div className="p-2 sm:p-4 flex-1 flex items-center justify-center overflow-auto bg-slate-950 min-h-[250px]">
+            <div className="p-2 sm:p-4 flex-1 flex items-center justify-center overflow-auto bg-slate-900 min-h-[250px]">
               {activeItem.mime_type.includes('video') || activeItem.original_filename.endsWith('.mp4') || activeItem.original_filename.endsWith('.mov') ? (
                 <video
                   src={`/api/media/${activeItem.media_id}?token=${token}`}
