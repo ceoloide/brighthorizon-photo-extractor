@@ -125,14 +125,23 @@ export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
                 onClick={() => setActiveItem(item)}
                 className="group relative bg-white rounded-2xl overflow-hidden border border-slate-200 hover:border-indigo-400 transition-all duration-200 cursor-pointer shadow-sm hover:shadow-md flex flex-col active:scale-[0.98]"
               >
-                <div className="aspect-square bg-slate-100 relative overflow-hidden flex items-center justify-center">
+                <div className="aspect-square bg-slate-900 relative overflow-hidden flex items-center justify-center">
                   {isVideo ? (
-                    <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900 text-indigo-400">
-                      <Video className="w-8 h-8 sm:w-10 sm:h-10 mb-1 opacity-90 group-hover:scale-105 transition-transform" />
-                      <span className="text-[9px] sm:text-[10px] font-mono font-bold uppercase bg-slate-800 text-slate-200 border border-slate-700 px-2 py-0.5 rounded-full">
-                        VIDEO
-                      </span>
-                    </div>
+                    <>
+                      <video
+                        src={`${mediaUrl}#t=0.5`}
+                        preload="metadata"
+                        muted
+                        playsInline
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                      />
+                      <div className="absolute top-2 right-2 z-10">
+                        <span className="text-[9px] sm:text-[10px] font-mono font-bold uppercase bg-slate-900/80 backdrop-blur-xs text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-full shadow-xs flex items-center gap-1">
+                          <Video className="w-3 h-3 text-indigo-400" />
+                          VIDEO
+                        </span>
+                      </div>
+                    </>
                   ) : (
                     <img
                       src={mediaUrl}
