@@ -214,11 +214,17 @@ class ScraperJob:
                 time.sleep(4.0)
                 
                 if "login" in page.url or "okta" in page.url:
-                    self.log("Saved session expired or missing; purging session state...")
-                    context.close()
-                    self._active_page = None
-                    self.tenant_storage.clear_session()
-                    raise Exception("Session expired or invalid. Please re-authenticate and provide fresh session cookies.")
+                    self.log("Saved session expired or missing; attempting automatic re-authentication...")
+                    config = self.tenant_storage.load_config()
+                    stored_pwd = config.get("password") or self.password
+                    if stored_pwd:
+                        self.password = stored_pwd
+                        self.perform_login(page)
+                    else:
+                        context.close()
+                        self._active_page = None
+                        self.tenant_storage.clear_session()
+                        raise Exception("Session expired or invalid. Please re-authenticate and provide fresh session cookies.")
 
                 # Trigger SSO token redirect from Family Info Center to My Bright Day if on familyinfocenter
                 if "familyinfocenter" in page.url:
@@ -246,11 +252,17 @@ class ScraperJob:
                 if "login" not in page.url and ("parents.html" in page.url or "familyinfocenter" in page.url or "tadpoles" in page.title().lower()):
                     self.log("Authenticated portal page verified via saved session!")
                 else:
-                    self.log("Saved session expired or missing; purging session state...")
-                    context.close()
-                    self._active_page = None
-                    self.tenant_storage.clear_session()
-                    raise Exception("Session expired or invalid. Please re-authenticate and provide fresh session cookies.")
+                    self.log("SSO redirect requires re-authentication; performing automatic login...")
+                    config = self.tenant_storage.load_config()
+                    stored_pwd = config.get("password") or self.password
+                    if stored_pwd:
+                        self.password = stored_pwd
+                        self.perform_login(page)
+                    else:
+                        context.close()
+                        self._active_page = None
+                        self.tenant_storage.clear_session()
+                        raise Exception("Session expired or invalid. Please re-authenticate and provide fresh session cookies.")
                     
                 if self._cancelled:
                     context.close()

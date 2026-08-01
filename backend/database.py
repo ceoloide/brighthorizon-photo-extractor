@@ -47,8 +47,17 @@ class TenantStorage:
                 print(f"[TenantStorage Error] Failed to delete session state file: {e}")
         if os.path.exists(self.user_data_dir):
             try:
-                shutil.rmtree(self.user_data_dir)
+                # Clean Singleton Lock files before rmtree
+                for root, dirs, files in os.walk(self.user_data_dir):
+                    for f in files:
+                        if "Singleton" in f or "Lock" in f or "RunningChromeVersion" in f:
+                            try:
+                                os.remove(os.path.join(root, f))
+                            except Exception:
+                                pass
+                shutil.rmtree(self.user_data_dir, ignore_errors=True)
                 os.makedirs(self.user_data_dir, exist_ok=True)
+                print(f"[TenantStorage] Purged user_data directory for {self.tenant_id}")
             except Exception as e:
                 print(f"[TenantStorage Error] Failed to purge user_data_dir: {e}")
 
