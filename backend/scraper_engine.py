@@ -211,7 +211,12 @@ class ScraperJob:
                 self.status["current_step"] = "Verifying portal session"
                 self.log("Navigating to https://familyinfocenter.brighthorizons.com/home...")
                 page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
-                time.sleep(4.0)
+                
+                try:
+                    page.wait_for_selector("span:has-text('Actions'), input[name='username'], button:has-text('Log In')", timeout=25000)
+                except Exception:
+                    pass
+                time.sleep(2.0)
                 
                 if "login" in page.url or "okta" in page.url:
                     self.log("Saved session expired or missing; attempting automatic re-authentication...")
@@ -229,8 +234,7 @@ class ScraperJob:
                 # Trigger SSO token redirect from Family Info Center to My Bright Day if on familyinfocenter
                 if "familyinfocenter" in page.url:
                     self.log("Triggering SSO token redirect from Family Information Center...")
-                    spans = page.locator("span").all()
-                    actions_spans = [s for s in spans if "Actions" in s.inner_text()]
+                    actions_spans = page.locator("span", has_text="Actions").all()
                     for span in actions_spans:
                         try:
                             span.click()
@@ -243,13 +247,13 @@ class ScraperJob:
                                 mbd_page.wait_for_load_state("domcontentloaded")
                                 page = mbd_page
                                 self._active_page = page
-                                time.sleep(6.0)
+                                time.sleep(5.0)
                                 self.log(f"Successfully landed on My Bright Day via SSO: {page.url}")
                                 break
                         except Exception as e:
                             self.log(f"Actions click attempt note: {e}")
 
-                if "login" not in page.url and ("parents.html" in page.url or "familyinfocenter" in page.url or "tadpoles" in page.title().lower()):
+                if "login" not in page.url and ("parents.html" in page.url or "familyinfocenter" in page.url or "brighthorizons" in page.url):
                     self.log("Authenticated portal page verified via saved session!")
                 else:
                     self.log("SSO redirect requires re-authentication; performing automatic login...")
