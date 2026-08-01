@@ -247,11 +247,25 @@ def logout(response: Response, request: Request, authorization: Optional[str] = 
     if token:
         payload = verify_jwt_token(token)
         if payload and "email" in payload:
-            tenant = TenantStorage(payload["email"])
+            email = payload["email"]
+            tenant = TenantStorage(email)
+            tenant_id = tenant.tenant_id
+            
+            # Stop any running extraction job or live Playwright browser/screen session
+            if tenant_id in _active_jobs:
+                try:
+                    job = _active_jobs.pop(tenant_id, None)
+                    if job:
+                        job.cancel()
+                        print(f"[Logout] Cancelled running scraper job for tenant {tenant_id}")
+                except Exception as e:
+                    print(f"[Logout Error] Failed to cancel scraper job for tenant {tenant_id}: {e}")
+                    
+            # Clear server-side session cookies, storage_state.json, and browser profile
             tenant.clear_session()
             
     response.delete_cookie("bh_tenant_token")
-    return {"status": "success", "message": "Signed out successfully and cleared local device session."}
+    return {"status": "success", "message": "Signed out successfully, stopped browser sessions, cancelled running jobs, and cleared server cookies."}
 
 @app.get("/api/auth/me")
 def get_me(request: Request, authorization: Optional[str] = Header(None)):

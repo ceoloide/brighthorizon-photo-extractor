@@ -46,8 +46,12 @@ export const App: React.FC = () => {
   };
 
   const handleLogout = async () => {
+    const storedToken = localStorage.getItem('bh_token');
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: storedToken ? { Authorization: `Bearer ${storedToken}` } : {},
+      });
     } catch {}
     localStorage.removeItem('bh_token');
     localStorage.removeItem('bh_email');
