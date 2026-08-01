@@ -54,18 +54,46 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
 
   useEffect(() => {
     fetchStatus();
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchStatus();
+      }
+    };
+
+    const handleFocus = () => {
+      fetchStatus();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
   }, [token]);
 
-  // Connect to real-time SSE extraction events stream & poll while running
+  // Connect to real-time SSE extraction events stream & poll while running with auto-reconnect
   useEffect(() => {
     let sse: EventSource | null = null;
+    let reconnectTimer: any = null;
     let pollTimer: any = null;
+    let isMounted = true;
 
-    if (status.state === 'running') {
+    const connectSSE = () => {
+      if (!isMounted) return;
       const url = `/api/extraction/events?token=${encodeURIComponent(token)}`;
+      if (sse) {
+        try {
+          sse.close();
+        } catch {}
+      }
+
       sse = new EventSource(url);
+
       sse.onmessage = (e) => {
-        if (e.data) {
+        if (e.data && isMounted) {
           try {
             const data = JSON.parse(e.data);
             setStatus((prev: any) => {
@@ -83,18 +111,41 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
           } catch {}
         }
       };
+
       sse.onerror = () => {
-        sse?.close();
+        if (!isMounted) return;
+        try {
+          sse?.close();
+        } catch {}
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(() => {
+          if (isMounted) {
+            fetchStatus();
+            connectSSE();
+          }
+        }, 3000);
       };
+    };
+
+    if (status.state === 'running') {
+      connectSSE();
 
       // Fallback periodic poll to ensure gallery refreshes dynamically
       pollTimer = setInterval(() => {
-        fetchStatus();
+        if (isMounted) {
+          fetchStatus();
+        }
       }, 4000);
     }
 
     return () => {
-      if (sse) sse.close();
+      isMounted = false;
+      if (sse) {
+        try {
+          sse.close();
+        } catch {}
+      }
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       if (pollTimer) clearInterval(pollTimer);
     };
   }, [status.state, token]);
