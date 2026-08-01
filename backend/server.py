@@ -126,11 +126,13 @@ def _start_verification_thread(email: str, password: str, tenant_storage: Tenant
             config["children"] = children
             tenant_storage.save_config(config)
             
+            session_expires_at = config.get("session_expires_at") or int((time.time() + 900) * 1000)
             token = create_jwt_token(email, tenant_id)
             state["status"] = "success"
             state["token"] = token
             state["email"] = email
             state["children"] = children
+            state["session_expires_at"] = session_expires_at
             state["step"] = "Verification complete!"
             state["timestamp"] = time.time()
         except Exception as e:
@@ -288,6 +290,7 @@ def get_me(request: Request, authorization: Optional[str] = Header(None)):
         return res
 
     config = tenant.load_config()
+    session_expires_at = config.get("session_expires_at") or int((time.time() + 900) * 1000)
     
     return {
         "authenticated": True,
@@ -295,6 +298,7 @@ def get_me(request: Request, authorization: Optional[str] = Header(None)):
         "tenant_id": tenant.tenant_id,
         "token": token,
         "children": config.get("children", []),
+        "session_expires_at": session_expires_at,
         "last_sync": config.get("last_sync")
     }
 

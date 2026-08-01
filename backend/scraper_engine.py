@@ -766,6 +766,9 @@ class ScraperJob:
             self._active_page = page
             
             try:
+                # Force clear cookies for fresh authentication during login pre-verification
+                context.clear_cookies()
+                
                 self.log("Navigating to portal and authenticating credentials...")
                 self._current_url = "https://familyinfocenter.brighthorizons.com/okta/login"
                 
@@ -786,7 +789,19 @@ class ScraperJob:
                 if not children:
                     update_progress("Verification failed: No child profiles found.", 3, page=page, force_shot=True)
                     raise Exception("Authentication succeeded, but no active child profiles were discovered for this account.")
-                    
+
+                # Calculate cookie expiration timestamp (or default to 15m / 900s)
+                all_cookies = context.cookies()
+                now_ts = time.time()
+                expirations = [c.get("expires") for c in all_cookies if c.get("expires") and c.get("expires") > now_ts]
+                min_exp = min(expirations) if expirations else (now_ts + 900)
+                session_expires_at_ms = int(min_exp * 1000)
+
+                config = self.tenant_storage.load_config()
+                config["session_expires_at"] = session_expires_at_ms
+                config["children"] = children
+                self.tenant_storage.save_config(config)
+
                 update_progress("Verification complete!", 3, page=page, force_shot=True)
                 return children
 

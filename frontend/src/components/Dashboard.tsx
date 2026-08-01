@@ -20,6 +20,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
   const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
   const [showConflictModal, setShowConflictModal] = useState<boolean>(false);
   const [showLogoutConfirmModal, setShowLogoutConfirmModal] = useState<boolean>(false);
+  const [showSessionWarningModal, setShowSessionWarningModal] = useState<boolean>(false);
+  const [dismissedSessionWarning, setDismissedSessionWarning] = useState<boolean>(false);
+  const [sessionExpiresAt, setSessionExpiresAt] = useState<number | null>(null);
+  const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
   const [deleting, setDeleting] = useState<boolean>(false);
   const [cancelling, setCancelling] = useState<boolean>(false);
   const [starting, setStarting] = useState<boolean>(false);
@@ -29,6 +33,33 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
       setShowLogoutConfirmModal(true);
     } else {
       onLogout();
+    }
+  };
+
+  const handleReauthenticateNow = async () => {
+    setShowSessionWarningModal(false);
+    if (status.state === 'running') {
+      try {
+        await fetch('/api/extraction/cancel', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` }
+        });
+      } catch {}
+    }
+    onLogout();
+  };
+
+  const fetchSessionInfo = async () => {
+    try {
+      const res = await fetch('/api/auth/me', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok && data.session_expires_at) {
+        setSessionExpiresAt(data.session_expires_at);
+      }
+    } catch (err) {
+      console.error('Error fetching session info:', err);
     }
   };
 
@@ -51,6 +82,35 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
       console.error('Error fetching extraction status:', err);
     }
   };
+
+  useEffect(() => {
+    fetchSessionInfo();
+  }, [token]);
+
+  // Session expiration countdown timer (1s interval)
+  useEffect(() => {
+    if (!sessionExpiresAt) return;
+
+    const updateTimer = () => {
+      const now = Date.now();
+      const rem = Math.max(0, Math.floor((sessionExpiresAt - now) / 1000));
+      setRemainingSeconds(rem);
+
+      // Trigger 5-minute warning modal
+      if (rem <= 300 && rem > 0 && !dismissedSessionWarning) {
+        setShowSessionWarningModal(true);
+      }
+
+      // Automatically handle session expiration
+      if (rem <= 0) {
+        handleReauthenticateNow();
+      }
+    };
+
+    updateTimer();
+    const timer = setInterval(updateTimer, 1000);
+    return () => clearInterval(timer);
+  }, [sessionExpiresAt, dismissedSessionWarning]);
 
   useEffect(() => {
     fetchStatus();
@@ -598,42 +658,49 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
         </div>
       )}
 
-      {/* Active Extraction Job Sign Out Confirmation Modal */}
-      {showLogoutConfirmModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
-          <div className="max-w-md w-full bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-xl space-y-4">
+      {/* 5-Minute Session Expiration Warning Modal */}
+      {showSessionWarningModal && remainingSeconds !== null && remainingSeconds > 0 && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="max-w-md w-full bg-white border border-amber-200 rounded-2xl p-5 sm:p-6 shadow-xl space-y-4">
             <div className="flex items-center gap-3 text-amber-600">
               <div className="p-2 bg-amber-50 rounded-xl border border-amber-100 shrink-0">
                 <AlertTriangle className="w-6 h-6" />
               </div>
-              <h3 className="font-bold text-slate-900 text-base">Active Extraction in Progress</h3>
+              <div>
+                <h3 className="font-bold text-slate-900 text-base">Session Expiring Soon</h3>
+                <p className="text-xs text-amber-700 font-medium">Bright Horizons security token expiration</p>
+              </div>
+            </div>
+
+            <div className="bg-amber-50/80 rounded-xl p-4 border border-amber-200/60 text-center space-y-1">
+              <span className="text-[11px] text-amber-800 uppercase font-mono tracking-wider font-semibold">Time Remaining</span>
+              <div className="text-3xl font-mono font-bold text-amber-900">
+                {Math.floor(remainingSeconds / 60).toString().padStart(2, '0')}:{(remainingSeconds % 60).toString().padStart(2, '0')}
+              </div>
             </div>
 
             <p className="text-xs text-slate-600 leading-relaxed">
-              An extraction job is currently downloading media files for your account. Signing out will stop all browser sessions, cancel the active extraction job, and clear server cookies.
-            </p>
-            <p className="text-[11px] text-amber-700 font-medium">
-              Are you sure you want to stop the job and sign out?
+              Your Bright Horizons portal session will expire in <strong className="text-amber-800">{Math.floor(remainingSeconds / 60)}m {remainingSeconds % 60}s</strong>. Re-authenticating now ensures uninterrupted photo & video downloads.
             </p>
 
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2 pt-2">
               <button
                 type="button"
-                onClick={() => setShowLogoutConfirmModal(false)}
+                onClick={() => {
+                  setShowSessionWarningModal(false);
+                  setDismissedSessionWarning(true);
+                }}
                 className="w-full sm:w-auto px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition border border-slate-200"
               >
-                Cancel
+                Dismiss Warning
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setShowLogoutConfirmModal(false);
-                  onLogout();
-                }}
+                onClick={handleReauthenticateNow}
                 className="w-full sm:w-auto px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-xl transition shadow-sm flex items-center justify-center gap-2"
               >
-                <LogOut className="w-3.5 h-3.5" />
-                <span>Stop Job & Sign Out</span>
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Re-authenticate Now</span>
               </button>
             </div>
           </div>
