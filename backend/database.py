@@ -29,9 +29,10 @@ class TenantStorage:
 
     def purge_all_data(self):
         """Completely purges all data for this tenant (media, manifests, user_data, archives)."""
+        self.clear_session()
         if os.path.exists(self.tenant_dir):
             try:
-                shutil.rmtree(self.tenant_dir)
+                shutil.rmtree(self.tenant_dir, ignore_errors=True)
                 print(f"[TenantStorage] Successfully purged all data for tenant {self.tenant_id}")
             except Exception as e:
                 print(f"[TenantStorage Error] Purging tenant directory {self.tenant_id} failed: {e}")

@@ -496,7 +496,7 @@ class ScraperJob:
             if "Authentication failed:" in str(e):
                 raise e
 
-    def perform_login(self, page: Page, update_progress_cb: Optional[Callable[[str, int], None]] = None):
+    def perform_login(self, page: Page, update_progress_cb: Optional[Callable[[str, int], None]] = None, force_fresh_auth: bool = False):
         """Ultra-robust login handler following the exact Bright Horizons & Auth0 SSO authentication sequence."""
         self._active_page = page
         self.log("Navigating to familyinfocenter.brighthorizons.com/okta/login...")
@@ -506,8 +506,37 @@ class ScraperJob:
         self.log(f"Detected page state: '{state}' (URL: {page.url})")
         
         if state == "authenticated":
-            self.log("Already authenticated via active browser session!")
-            return
+            # Verify if MyBrightDay domain session is genuinely active and valid
+            mbd_valid = False
+            try:
+                resp = page.request.get("https://mybrightday.brighthorizons.com/remote/v1/user_payload", timeout=5000)
+                if resp.status == 200:
+                    try:
+                        payload = resp.json()
+                        if isinstance(payload, dict) and (payload.get("user") or payload.get("dependents")):
+                            mbd_valid = True
+                    except Exception:
+                        pass
+            except Exception as e:
+                self.log(f"MyBrightDay token validation check failed: {e}")
+
+            if mbd_valid and not force_fresh_auth:
+                self.log("Already authenticated with valid MyBrightDay browser session!")
+                return
+            else:
+                self.log("Stale or incomplete session detected (missing/invalid MyBrightDay tokens). Forcing full Auth0 re-authentication...")
+                try:
+                    page.goto("https://familyinfocenter.brighthorizons.com/okta/logout", wait_until="domcontentloaded", timeout=10000)
+                    page.wait_for_timeout(1500)
+                except Exception:
+                    pass
+                try:
+                    page.context.clear_cookies()
+                except Exception:
+                    pass
+                page.goto("https://familyinfocenter.brighthorizons.com/okta/login", wait_until="domcontentloaded")
+                state = self.detect_page_state(page, max_wait_sec=15)
+                self.log(f"Post-logout refreshed page state: '{state}' (URL: {page.url})")
 
         # Step 1: Wait for and click Landing Page "Log In" button
         if state == "landing_login_btn":
@@ -776,7 +805,7 @@ class ScraperJob:
                 page.wait_for_timeout(2000)
                 update_progress("Authenticating with Bright Horizons SSO...", 2, page=page, force_shot=True)
                 
-                self.perform_login(page, update_progress_cb=lambda s, idx: update_progress(s, idx, page=page, force_shot=True))
+                self.perform_login(page, update_progress_cb=lambda s, idx: update_progress(s, idx, page=page, force_shot=True), force_fresh_auth=True)
                 self._current_url = page.url
                 update_progress("Authentication verified! Discovering enrolled children...", 3, page=page, force_shot=True)
                 
