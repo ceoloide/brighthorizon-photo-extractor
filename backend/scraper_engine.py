@@ -530,8 +530,13 @@ class ScraperJob:
             else:
                 self.log("Stale or incomplete session detected (missing/invalid MyBrightDay tokens). Forcing full Auth0 re-authentication...")
                 try:
+                    page.goto("https://bhloginsso.brighthorizons.com/v2/logout", wait_until="domcontentloaded", timeout=10000)
+                    page.wait_for_timeout(1000)
+                except Exception:
+                    pass
+                try:
                     page.goto("https://familyinfocenter.brighthorizons.com/okta/logout", wait_until="domcontentloaded", timeout=10000)
-                    page.wait_for_timeout(1500)
+                    page.wait_for_timeout(1000)
                 except Exception:
                     pass
                 try:
