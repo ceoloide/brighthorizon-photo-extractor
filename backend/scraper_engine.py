@@ -64,14 +64,12 @@ def launch_stealth_persistent_context(playwright_instance, user_data_dir: str, e
     clean_user_data_locks(user_data_dir)
     ensure_xvfb_display(1280, 720)
 
-    user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     args = [
         "--disable-blink-features=AutomationControlled",
         "--no-sandbox",
         "--disable-dev-shm-usage",
         "--window-size=1280,720",
-        "--lang=en-US,en",
-        "--disable-features=IsolateOrigins,site-per-process"
+        "--lang=en-US,en"
     ]
     if extra_args:
         args.extend(extra_args)
@@ -81,7 +79,6 @@ def launch_stealth_persistent_context(playwright_instance, user_data_dir: str, e
         "headless": False,
         "args": args,
         "ignore_default_args": ["--enable-automation"],
-        "user_agent": user_agent,
         "viewport": {"width": 1280, "height": 720}
     }
     context_kwargs.update(kwargs)
@@ -713,33 +710,27 @@ class ScraperJob:
                 for cf_frame, f_text in cf_frames:
                     self.log_structured("INFO", "TURNSTILE", f"[Turnstile] Attempting verification click on Cloudflare frame (URL: {cf_frame.url[:60]}...)...")
                     try:
-                        # Strategy A: Top-level page human mouse movement to iframe bounding box
-                        iframe_loc = page.locator("iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile']").first
-                        if iframe_loc.count() > 0 and iframe_loc.is_visible():
-                            box = iframe_loc.bounding_box()
-                            if box and box['width'] > 0 and box['height'] > 0:
-                                target_x = box['x'] + min(35.0, box['width'] / 2)
-                                target_y = box['y'] + min(35.0, box['height'] / 2)
-                                self.log_structured("INFO", "TURNSTILE", f"[Turnstile] Moving human mouse to iframe box ({round(target_x, 1)}, {round(target_y, 1)})...")
-                                page.mouse.move(target_x, target_y, steps=15)
-                                page.wait_for_timeout(150)
-                                page.mouse.click(target_x, target_y)
-                                last_click_t = time.time()
-                                page.wait_for_timeout(1200)
-                                break
-
-                        # Strategy B: In-frame element hover and click without synthetic force override
-                        cb = cf_frame.locator("input[type='checkbox'], label, .ctp-checkbox-label, #challenge-stage, span.mark, .mark").first
-                        if cb.count() > 0:
-                            cb.hover()
-                            page.wait_for_timeout(100)
-                            cb.click()
-                        else:
-                            cf_frame.click("body", position={"x": 45, "y": 45})
+                        # Strategy A: Direct frame body click at (30, 30) where Turnstile checkbox resides
+                        cf_frame.click("body", position={"x": 30, "y": 30})
                         last_click_t = time.time()
-                        page.wait_for_timeout(1200)
+                        page.wait_for_timeout(1000)
                     except Exception as e:
-                        self.log_structured("WARN", "TURNSTILE", f"[Turnstile] Click note: {e}")
+                        try:
+                            # Strategy B: Top-level page human mouse movement to iframe bounding box
+                            iframe_loc = page.locator("iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile']").first
+                            if iframe_loc.count() > 0 and iframe_loc.is_visible():
+                                box = iframe_loc.bounding_box()
+                                if box and box['width'] > 0 and box['height'] > 0:
+                                    target_x = box['x'] + min(35.0, box['width'] / 2)
+                                    target_y = box['y'] + min(35.0, box['height'] / 2)
+                                    self.log_structured("INFO", "TURNSTILE", f"[Turnstile] Moving human mouse to iframe box ({round(target_x, 1)}, {round(target_y, 1)})...")
+                                    page.mouse.move(target_x, target_y, steps=10)
+                                    page.wait_for_timeout(100)
+                                    page.mouse.click(target_x, target_y)
+                                    last_click_t = time.time()
+                                    page.wait_for_timeout(1000)
+                        except Exception as e2:
+                            self.log_structured("WARN", "TURNSTILE", f"[Turnstile] Click note: {e2}")
 
             # 5. Fallback: If challenge remains active after 8 seconds, request clearance from FlareSolverr service
             if has_challenge and (elapsed > 8.0) and (time.time() - last_flaresolverr_t > 12.0):
@@ -848,20 +839,21 @@ class ScraperJob:
                     page.wait_for_timeout(1000)
                 except Exception:
                     pass
-                try:
-                    page.context.clear_cookies()
-                except Exception:
-                    pass
+                if force_fresh_auth:
+                    try:
+                        page.context.clear_cookies()
+                    except Exception:
+                        pass
 
-                # Deep clear browser cookies and origin storage via Chrome DevTools Protocol (CDP)
-                try:
-                    cdp = page.context.new_cdp_session(page)
-                    cdp.send("Network.clearBrowserCookies")
-                    cdp.send("Storage.clearDataForOrigin", {"origin": "https://bhloginsso.brighthorizons.com", "storageTypes": "all"})
-                    cdp.send("Storage.clearDataForOrigin", {"origin": "https://familyinfocenter.brighthorizons.com", "storageTypes": "all"})
-                    cdp.send("Storage.clearDataForOrigin", {"origin": "https://mybrightday.brighthorizons.com", "storageTypes": "all"})
-                except Exception as e:
-                    self.log(f"CDP session clear notice: {e}")
+                    # Deep clear browser cookies and origin storage via Chrome DevTools Protocol (CDP)
+                    try:
+                        cdp = page.context.new_cdp_session(page)
+                        cdp.send("Network.clearBrowserCookies")
+                        cdp.send("Storage.clearDataForOrigin", {"origin": "https://bhloginsso.brighthorizons.com", "storageTypes": "all"})
+                        cdp.send("Storage.clearDataForOrigin", {"origin": "https://familyinfocenter.brighthorizons.com", "storageTypes": "all"})
+                        cdp.send("Storage.clearDataForOrigin", {"origin": "https://mybrightday.brighthorizons.com", "storageTypes": "all"})
+                    except Exception as e:
+                        self.log(f"CDP session clear notice: {e}")
 
                 page.goto("https://familyinfocenter.brighthorizons.com/okta/login", wait_until="domcontentloaded")
                 state = self.detect_page_state(page, max_wait_sec=15)
