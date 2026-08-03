@@ -357,7 +357,11 @@ def run_extraction_pipeline(
 
             # 7. Media Downloading
             try:
-                response = page.request.get(download_url)
+                req_headers = {
+                    "Referer": "https://mybrightday.brighthorizons.com/dashboard/parents.html",
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+                }
+                response = page.request.get(download_url, headers=req_headers, timeout=120000)
                 if not response or not response.ok:
                     status_code = getattr(response, "status", "unknown")
                     log(f"HTTP GET failed for {download_url} with status {status_code}")
@@ -367,7 +371,7 @@ def run_extraction_pipeline(
                     json_data = json.loads(body_bytes.decode("utf-8"))
                     if isinstance(json_data, dict) and "signed_url" in json_data:
                         signed_url = json_data["signed_url"]
-                        media_resp = page.request.get(signed_url, timeout=120000)
+                        media_resp = page.request.get(signed_url, headers={"User-Agent": req_headers["User-Agent"]}, timeout=120000)
                         if media_resp and media_resp.ok:
                             body_bytes = media_resp.body()
                 except Exception:
