@@ -17,7 +17,12 @@ from playwright.sync_api import sync_playwright, BrowserContext, Page
 from backend.database import TenantStorage
 from backend.dom_parser import extract_obj_id_from_url_or_style, get_month_end_date
 
-FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://192.168.1.176:8191/v1")
+try:
+    from playwright_stealth import stealth_sync
+except ImportError:
+    stealth_sync = None
+
+FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://flaresolverr:8191/v1")
 
 def ensure_xvfb_display(width=1280, height=720):
     """Ensures Xvfb virtual display :99 is active without disrupting active concurrent sessions."""
@@ -57,11 +62,16 @@ def clean_user_data_locks(user_data_dir: str):
 def launch_stealth_persistent_context(playwright_instance, user_data_dir: str, extra_args: list = None, **kwargs):
     """Launches a persistent browser context targeting real system Chrome with anti-bot masking flags."""
     clean_user_data_locks(user_data_dir)
+    ensure_xvfb_display(1280, 720)
+
+    user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     args = [
         "--disable-blink-features=AutomationControlled",
         "--no-sandbox",
         "--disable-dev-shm-usage",
-        "--window-size=1280,720"
+        "--window-size=1280,720",
+        "--lang=en-US,en",
+        "--disable-features=IsolateOrigins,site-per-process"
     ]
     if extra_args:
         args.extend(extra_args)
@@ -71,6 +81,7 @@ def launch_stealth_persistent_context(playwright_instance, user_data_dir: str, e
         "headless": False,
         "args": args,
         "ignore_default_args": ["--enable-automation"],
+        "user_agent": user_agent,
         "viewport": {"width": 1280, "height": 720}
     }
     context_kwargs.update(kwargs)
@@ -91,6 +102,24 @@ def launch_stealth_persistent_context(playwright_instance, user_data_dir: str, e
         context_kwargs.pop("executable_path", None)
         context_kwargs.pop("channel", None)
         context = playwright_instance.chromium.launch_persistent_context(**context_kwargs)
+
+    # Inject anti-bot stealth scripts
+    try:
+        context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+        """)
+    except Exception:
+        pass
+
+    if stealth_sync:
+        for p in context.pages:
+            try:
+                stealth_sync(p)
+            except Exception:
+                pass
+        context.on("page", lambda p: stealth_sync(p))
 
     state_file = os.path.join(user_data_dir, "storage_state.json")
     if os.path.exists(state_file):
@@ -601,6 +630,7 @@ class ScraperJob:
         start_t = time.time()
         last_click_t = 0.0
         last_log_t = 0.0
+        last_flaresolverr_t = 0.0
         grace_period_sec = 1.5  # Max grace period to detect dynamic iframe insertion
 
         while time.time() - start_t < max_wait_sec:
@@ -701,6 +731,19 @@ class ScraperJob:
                         page.wait_for_timeout(1200)
                     except Exception as e:
                         self.log_structured("WARN", "TURNSTILE", f"[Turnstile] Click note: {e}")
+
+            # 5. Fallback: If challenge remains active after 8 seconds, request clearance from FlareSolverr service
+            if has_challenge and (elapsed > 8.0) and (time.time() - last_flaresolverr_t > 12.0):
+                last_flaresolverr_t = time.time()
+                self.log_structured("INFO", "TURNSTILE", f"[Turnstile] Challenge prompt active after {round(elapsed, 1)}s. Requesting FlareSolverr clearance cookies for {page.url[:60]}...")
+                try:
+                    solver_cookies, solver_ua = self.solve_cloudflare_flaresolverr(page.url)
+                    if solver_cookies:
+                        page.context.add_cookies(solver_cookies)
+                        self.log_structured("INFO", "TURNSTILE", f"[Turnstile] Injected {len(solver_cookies)} FlareSolverr clearance cookies into browser context.")
+                        page.wait_for_timeout(1500)
+                except Exception as e:
+                    self.log_structured("WARN", "TURNSTILE", f"[Turnstile] FlareSolverr fallback note: {e}")
 
             page.wait_for_timeout(250)
 
