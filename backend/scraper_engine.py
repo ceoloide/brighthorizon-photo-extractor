@@ -663,20 +663,41 @@ class ScraperJob:
                 last_log_t = time.time()
                 self.log_structured("DEBUG", "TURNSTILE", f"[Turnstile] Status ({current_elapsed}s): token_populated={token_populated}, cf_frames={len(cf_frames)}, challenge_present={has_challenge}, url={page.url}")
 
-            # 4. If challenge frame is present, attempt click if unverified for > 4s
-            if cf_frames and (time.time() - last_click_t > 4.0):
+            # 4. If challenge frame is present, attempt click on checkbox element if unverified for > 3.0s
+            if cf_frames and (time.time() - last_click_t > 3.0):
                 for cf_frame, f_text in cf_frames:
                     self.log_structured("INFO", "TURNSTILE", f"[Turnstile] Attempting verification click on Cloudflare frame (URL: {cf_frame.url[:60]}...)...")
                     try:
-                        cf_frame.click("body", position={"x": 30, "y": 30})
+                        # Target explicit Turnstile checkbox selectors inside the iframe
+                        cb = cf_frame.locator("input[type='checkbox'], label, .ctp-checkbox-label, #challenge-stage, span.mark, .mark").first
+                        if cb.count() > 0:
+                            cb.click(force=True)
+                        else:
+                            cf_frame.click("body", position={"x": 45, "y": 45}, force=True)
                         last_click_t = time.time()
-                        page.wait_for_timeout(1000)
+                        page.wait_for_timeout(1200)
                     except Exception as e:
                         self.log_structured("WARN", "TURNSTILE", f"[Turnstile] Click note: {e}")
 
             page.wait_for_timeout(250)
 
         # 5. Post-timeout strict failure assessment
+        final_token = False
+        try:
+            final_token = page.evaluate("""() => {
+                const inputs = document.querySelectorAll("input[name='cf-turnstile-response'], input[name='g-recaptcha-response']");
+                for (const input of inputs) {
+                    if (input.value && input.value.trim().length > 10) return true;
+                }
+                return false;
+            }""")
+        except Exception:
+            pass
+
+        if final_token:
+            self.log_structured("INFO", "TURNSTILE", f"[Turnstile] 🎉 Verified: Token populated after monitoring window.")
+            return True
+
         final_body = ""
         try:
             final_body = page.locator("body").inner_text().lower()
@@ -686,7 +707,7 @@ class ScraperJob:
         final_frames = " ".join([f.locator("body").inner_text().lower() for f in page.frames if "challenges.cloudflare.com" in f.url])
         final_combined = final_body + " " + final_frames
 
-        if "verify you are human" in final_combined or "verify you are a human" in final_combined:
+        if ("verify you are human" in final_combined or "verify you are a human" in final_combined) and not final_token:
             self.log_structured("ERROR", "TURNSTILE", "[Turnstile] ❌ Verification failed: Cloudflare 'Verify you are human' challenge remained unsolved.")
             raise Exception("Cloudflare Turnstile verification failed. Please try again.")
 
