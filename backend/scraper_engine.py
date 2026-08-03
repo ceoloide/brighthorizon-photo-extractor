@@ -651,7 +651,13 @@ class ScraperJob:
                 self.log_structured("INFO", "TURNSTILE", f"[Turnstile] 🎉 Successfully verified ('Success!' text detected) after {round(elapsed, 2)}s.")
                 return True
 
-            has_challenge = "verify you are human" in combined or "verify you are a human" in combined
+            has_challenge = any(p in combined for p in [
+                "verify you are human",
+                "verify you are a human",
+                "verifying you are human",
+                "confirm you are human",
+                "human verification"
+            ])
 
             # 3. Fast-Path Bypass: If grace period elapsed and NO interactive challenge prompt ("verify you are human") exists
             if elapsed >= grace_period_sec and not has_challenge:
@@ -663,17 +669,34 @@ class ScraperJob:
                 last_log_t = time.time()
                 self.log_structured("DEBUG", "TURNSTILE", f"[Turnstile] Status ({current_elapsed}s): token_populated={token_populated}, cf_frames={len(cf_frames)}, challenge_present={has_challenge}, url={page.url}")
 
-            # 4. If challenge frame is present, attempt click on checkbox element if unverified for > 3.0s
+            # 4. If challenge frame is present, attempt human mouse click on Turnstile checkbox element if unverified for > 3.0s
             if cf_frames and (time.time() - last_click_t > 3.0):
                 for cf_frame, f_text in cf_frames:
                     self.log_structured("INFO", "TURNSTILE", f"[Turnstile] Attempting verification click on Cloudflare frame (URL: {cf_frame.url[:60]}...)...")
                     try:
-                        # Target explicit Turnstile checkbox selectors inside the iframe
+                        # Strategy A: Top-level page human mouse movement to iframe bounding box
+                        iframe_loc = page.locator("iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile']").first
+                        if iframe_loc.count() > 0 and iframe_loc.is_visible():
+                            box = iframe_loc.bounding_box()
+                            if box and box['width'] > 0 and box['height'] > 0:
+                                target_x = box['x'] + min(35.0, box['width'] / 2)
+                                target_y = box['y'] + min(35.0, box['height'] / 2)
+                                self.log_structured("INFO", "TURNSTILE", f"[Turnstile] Moving human mouse to iframe box ({round(target_x, 1)}, {round(target_y, 1)})...")
+                                page.mouse.move(target_x, target_y, steps=15)
+                                page.wait_for_timeout(150)
+                                page.mouse.click(target_x, target_y)
+                                last_click_t = time.time()
+                                page.wait_for_timeout(1200)
+                                break
+
+                        # Strategy B: In-frame element hover and click without synthetic force override
                         cb = cf_frame.locator("input[type='checkbox'], label, .ctp-checkbox-label, #challenge-stage, span.mark, .mark").first
                         if cb.count() > 0:
-                            cb.click(force=True)
+                            cb.hover()
+                            page.wait_for_timeout(100)
+                            cb.click()
                         else:
-                            cf_frame.click("body", position={"x": 45, "y": 45}, force=True)
+                            cf_frame.click("body", position={"x": 45, "y": 45})
                         last_click_t = time.time()
                         page.wait_for_timeout(1200)
                     except Exception as e:
