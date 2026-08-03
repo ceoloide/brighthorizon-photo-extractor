@@ -1311,16 +1311,23 @@ class ScraperJob:
                     if not obj_id:
                         continue
                     
-                    # Check incremental sync stop condition
+                    # Check manifest for existing item
                     existing_entry = False
+                    existing_manifest_entry = None
                     for m_id, entry in manifest.items():
                         if entry.get("obj_id") == obj_id:
                             existing_entry = True
+                            existing_manifest_entry = entry
                             break
                             
-                    if existing_entry and self.sync_mode == "incremental":
-                        self.log(f"Incremental sync hit existing obj_id {obj_id[:8]}... Stopping child feed scan.")
-                        return
+                    if existing_entry:
+                        fn = existing_manifest_entry.get("original_filename", "media") if existing_manifest_entry else "media"
+                        if self.sync_mode == "incremental":
+                            self.log(f"[Incremental Sync] Hit existing item obj_id {obj_id[:8]}... ('{fn}'). Halting child feed scan.")
+                            return
+                        else:
+                            self.log(f"[Skipped / Existing] Item obj_id {obj_id[:8]}... already downloaded as '{fn}'. Skipping.")
+                            continue
 
                     # Parse date overlay
                     overlay_span = item.locator("span.name span").first
@@ -1332,6 +1339,8 @@ class ScraperJob:
                     if self.start_date and date_str < self.start_date:
                         self.log(f"Post date {date_str} is before custom start date {self.start_date}. Skipping.")
                         continue
+                        
+                    self.log(f"[Downloading] Intercepted new media item (obj_id: {obj_id[:8]}..., type: {'video' if is_video else 'photo'}, date: {date_str}). Fetching binary...")
                         
                     # Extract full res URL while preserving exact query string parameters (&key=...)
                     resolved_clean = html.unescape(resolved_url).strip()
@@ -1499,3 +1508,82 @@ def set_eastern_timestamp(file_path: str, date_str: str):
         os.utime(file_path, (epoch, epoch))
     except Exception as e:
         print(f"Timestamp set error: {e}")
+
+def redownload_single_media_item(tenant_storage: TenantStorage, media_id: str) -> Dict[str, Any]:
+    """Re-downloads a specific photo or video from My Bright Day by media_id."""
+    manifest = tenant_storage.load_manifest()
+    if media_id not in manifest:
+        raise Exception(f"Media item '{media_id}' not found in manifest.")
+        
+    entry = manifest[media_id]
+    obj_id = entry.get("obj_id")
+    date_str = entry.get("date", datetime.now().strftime("%Y-%m-%d"))
+    child_name = entry.get("child", "Child")
+    mime_type = entry.get("mime_type", "image/jpeg")
+    
+    if not obj_id:
+        raise Exception(f"Media item '{media_id}' missing obj_id parameter.")
+        
+    download_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={obj_id}&key={obj_id}"
+    req_headers = {
+        "Referer": "https://mybrightday.brighthorizons.com/dashboard/parents.html",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    }
+    
+    user_data_dir = tenant_storage.user_data_dir
+    with sync_playwright() as p:
+        context = p.chromium.launch_persistent_context(
+            user_data_dir=user_data_dir,
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+        )
+        page = context.new_page()
+        try:
+            state_file = os.path.join(user_data_dir, "storage_state.json")
+            if os.path.exists(state_file):
+                try:
+                    with open(state_file, "r") as f:
+                        state_data = json.load(f)
+                    context.add_cookies(state_data.get("cookies", []))
+                except Exception:
+                    pass
+
+            response = page.request.get(download_url, headers=req_headers, timeout=60000)
+            file_bytes = None
+            if response.status == 200:
+                body_data = response.body()
+                try:
+                    json_data = json.loads(body_data.decode("utf-8"))
+                    if isinstance(json_data, dict) and "signed_url" in json_data:
+                        signed_url = json_data["signed_url"]
+                        if "mime_type" in json_data and json_data["mime_type"]:
+                            mime_type = json_data["mime_type"]
+                        media_resp = page.request.get(signed_url, headers={"User-Agent": req_headers["User-Agent"]}, timeout=60000)
+                        if media_resp.status == 200:
+                            file_bytes = media_resp.body()
+                except Exception:
+                    file_bytes = body_data
+
+            if not file_bytes:
+                raise Exception(f"HTTP {response.status} failed retrieving media stream from My Bright Day.")
+                
+            orig_filename = entry.get("original_filename", f"{child_name} {date_str}.jpg")
+            comment_text = entry.get("comment", f"Bright Horizons photo for {child_name} on {date_str}")
+            
+            # Save updated entry to tenant storage
+            updated_entry = tenant_storage.add_media_entry(
+                obj_id=obj_id,
+                child=child_name,
+                date_str=date_str,
+                original_filename=orig_filename,
+                comment=comment_text,
+                file_bytes=file_bytes,
+                mime_type=mime_type
+            )
+            
+            abs_path = os.path.join(tenant_storage.tenant_dir, updated_entry["storage_path"])
+            set_eastern_timestamp(abs_path, date_str)
+            return updated_entry
+        finally:
+            try: context.close()
+            except Exception: pass

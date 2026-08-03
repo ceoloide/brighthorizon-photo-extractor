@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from backend.security import verify_jwt_token, create_jwt_token, get_tenant_id
 from backend.database import TenantStorage
-from backend.scraper_engine import ScraperJob
+from backend.scraper_engine import ScraperJob, redownload_single_media_item
 from backend.archive_stream import start_zip_task, get_archive_status, range_stream_response
 
 app = FastAPI(title="Bright Horizons Photo Extractor API", version="2.0.0")
@@ -481,6 +481,14 @@ def serve_media(media_id: str, request: Request, token: Optional[str] = None, au
 @app.get("/api/media/{media_id}/thumbnail")
 def serve_media_thumbnail(media_id: str, request: Request, token: Optional[str] = None, authorization: Optional[str] = Header(None)):
     return serve_media(media_id, request, token=token, authorization=authorization, thumb=True)
+
+@app.post("/api/media/{media_id}/redownload")
+def redownload_media_item_endpoint(media_id: str, tenant: TenantStorage = Depends(get_current_tenant)):
+    try:
+        updated_entry = redownload_single_media_item(tenant, media_id)
+        return {"status": "success", "message": "Successfully re-downloaded media item from My Bright Day", "media": updated_entry}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # --- Archive & Resumable Downloads ---
 @app.post("/api/archive/create")
