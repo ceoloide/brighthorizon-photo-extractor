@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Play, RefreshCw, LogOut, CheckCircle2, AlertTriangle, Terminal, Camera, Shield, FileSpreadsheet, FolderTree, Trash2, AlertCircle } from 'lucide-react';
+import { Play, RefreshCw, LogOut, CheckCircle2, AlertTriangle, Terminal, Camera, Shield, FileSpreadsheet, FolderTree, Trash2, AlertCircle, Copy, Check, Monitor } from 'lucide-react';
 import { Gallery } from './Gallery';
 import { ArchiveManager } from './ArchiveManager';
 
@@ -17,6 +17,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
   const [status, setStatus] = useState<any>({ state: 'idle', logs: [] });
   const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
   const [showLogs, setShowLogs] = useState<boolean>(false);
+  const [copiedLogs, setCopiedLogs] = useState<boolean>(false);
   const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
   const [showConflictModal, setShowConflictModal] = useState<boolean>(false);
   const [showLogoutConfirmModal, setShowLogoutConfirmModal] = useState<boolean>(false);
@@ -34,6 +35,23 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
     } else {
       onLogout();
     }
+  };
+
+  const handleCopyLogs = () => {
+    if (!status.logs || status.logs.length === 0) return;
+    const fullLogText = status.logs.join('\n');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(fullLogText);
+    } else {
+      const textArea = document.createElement('textarea');
+      textArea.value = fullLogText;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+    }
+    setCopiedLogs(true);
+    setTimeout(() => setCopiedLogs(false), 2000);
   };
 
   const handleReauthenticateNow = async () => {
@@ -537,18 +555,40 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
                 </span>
               </div>
 
-              {/* Console Log Drawer */}
+              {/* Console Log Drawer & Live Browser Preview */}
               <div className="pt-1">
-                <button
-                  onClick={() => setShowLogs(!showLogs)}
-                  className="text-[11px] text-slate-500 hover:text-slate-800 flex items-center gap-1.5 mb-2 font-mono"
-                >
-                  <Terminal className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                  <span>{showLogs ? 'Hide Console Logs' : 'Show Console Logs'}</span>
-                </button>
+                <div className="flex items-center justify-between mb-2">
+                  <button
+                    onClick={() => setShowLogs(!showLogs)}
+                    className="text-[11px] text-slate-500 hover:text-slate-800 flex items-center gap-1.5 font-mono"
+                  >
+                    <Terminal className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                    <span>{showLogs ? 'Hide Console Logs' : 'Show Console Logs'}</span>
+                  </button>
+
+                  {showLogs && status.logs && status.logs.length > 0 && (
+                    <button
+                      onClick={handleCopyLogs}
+                      className="text-[11px] text-slate-500 hover:text-indigo-600 flex items-center gap-1 font-mono bg-white hover:bg-slate-100 border border-slate-200 px-2 py-1 rounded-lg transition"
+                      title="Copy full console log drawer content to clipboard"
+                    >
+                      {copiedLogs ? (
+                        <>
+                          <Check className="w-3 h-3 text-emerald-600" />
+                          <span className="text-emerald-600 font-semibold">Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3 h-3 text-slate-500" />
+                          <span>Copy Logs</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
 
                 {showLogs && status.logs && (
-                  <div className="bg-slate-900 rounded-xl p-3 sm:p-3.5 max-h-40 overflow-y-auto font-mono text-[11px] text-slate-200 space-y-1">
+                  <div className="bg-slate-900 rounded-xl p-3 sm:p-3.5 max-h-56 overflow-y-auto font-mono text-[11px] text-slate-200 space-y-1 border border-slate-800">
                     {status.logs.map((log: string, idx: number) => (
                       <div key={idx} className="leading-relaxed flex items-start gap-2 break-all">
                         <span className="text-slate-500 select-none">&gt;</span>

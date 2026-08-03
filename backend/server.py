@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from backend.security import verify_jwt_token, create_jwt_token, get_tenant_id
 from backend.database import TenantStorage
-from backend.scraper_engine import ScraperJob
+from backend.scraper_engine import ScraperJob, redownload_single_media_item
 from backend.archive_stream import start_zip_task, get_archive_status, range_stream_response
 
 app = FastAPI(title="Bright Horizons Photo Extractor API", version="2.0.0")
@@ -159,7 +159,8 @@ async def verify_stream(email: str = Query(...), password: str = Query(...)):
     tenant_id = tenant_storage.tenant_id
     
     current_state = _active_verifications.get(tenant_id)
-    if not current_state or current_state.get("status") in ["failed", "completed_reset"]:
+    if not current_state or current_state.get("status") in ["success", "failed", "completed_reset"]:
+        _active_verifications.pop(tenant_id, None)
         current_state = _start_verification_thread(email_clean, password, tenant_storage)
 
     async def event_generator():
@@ -199,7 +200,8 @@ def verify_progress(req: LoginRequest):
     tenant_id = tenant_storage.tenant_id
     
     current_state = _active_verifications.get(tenant_id)
-    if not current_state or current_state.get("status") in ["failed", "completed_reset"]:
+    if not current_state or current_state.get("status") in ["success", "failed", "completed_reset"]:
+        _active_verifications.pop(tenant_id, None)
         current_state = _start_verification_thread(email, req.password, tenant_storage)
         return JSONResponse(content=current_state)
         
@@ -262,6 +264,9 @@ def logout(response: Response, request: Request, authorization: Optional[str] = 
                         print(f"[Logout] Cancelled running scraper job for tenant {tenant_id}")
                 except Exception as e:
                     print(f"[Logout Error] Failed to cancel scraper job for tenant {tenant_id}: {e}")
+
+            # Pop any verification session state from memory
+            _active_verifications.pop(tenant_id, None)
                     
             # Clear server-side session cookies, storage_state.json, and browser profile
             tenant.clear_session()
@@ -312,6 +317,9 @@ def delete_account(tenant: TenantStorage = Depends(get_current_tenant)):
         if job:
             job.status["state"] = "failed"
             job.status["error"] = "Account deleted"
+
+    # Pop any verification session state from memory
+    _active_verifications.pop(tenant_id, None)
             
     # Purge all media, user_data, encrypted manifests, and archives from disk
     tenant.purge_all_data()
@@ -474,6 +482,14 @@ def serve_media(media_id: str, request: Request, token: Optional[str] = None, au
 def serve_media_thumbnail(media_id: str, request: Request, token: Optional[str] = None, authorization: Optional[str] = Header(None)):
     return serve_media(media_id, request, token=token, authorization=authorization, thumb=True)
 
+@app.post("/api/media/{media_id}/redownload")
+def redownload_media_item_endpoint(media_id: str, tenant: TenantStorage = Depends(get_current_tenant)):
+    try:
+        updated_entry = redownload_single_media_item(tenant, media_id)
+        return {"status": "success", "message": "Successfully re-downloaded media item from My Bright Day", "media": updated_entry}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # --- Archive & Resumable Downloads ---
 @app.post("/api/archive/create")
 def create_archive(req: ArchiveRequest, tenant: TenantStorage = Depends(get_current_tenant)):
@@ -519,6 +535,10 @@ if os.path.exists(dist_dir):
             return FileResponse(file_path)
         index_path = os.path.join(dist_dir, "index.html")
         if os.path.exists(index_path):
-            return FileResponse(index_path, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+            return FileResponse(index_path, headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0"
+            })
         return {"message": "Frontend build not found"}
 

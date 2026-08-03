@@ -38,7 +38,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
   }
 
   return (
-    <div className="min-h-screen flex flex-col justify-center items-center p-4 sm:p-6 bg-slate-50 font-sans">
+    <div className="flex-1 flex flex-col justify-center items-center p-4 sm:p-6 bg-slate-50 font-sans">
       <div className="max-w-md w-full bg-white rounded-2xl p-5 sm:p-8 border border-slate-200 shadow-sm space-y-6">
         {/* Header */}
         <div className="text-center space-y-2">

@@ -85,13 +85,16 @@ Inspect:
 
 Provide concrete, actionable security feedback, edge cases, and architectural recommendations.
 
-## Follow-up — 2026-07-30T16:49:05Z
+## Follow-up — 2026-08-03T08:29:18Z
 
-Perform an in-depth adversarial audit on:
-1. Job Cancellation Responsiveness: Verify that calling POST /api/extraction/cancel immediately closes active Playwright pages/contexts/browsers and transitions ScraperJob status to 'cancelled'.
-2. Session Cookie & LocalStorage Reuse: Audit ScraperJob.run() to ensure it loads storage_state.json via browser.new_context(storage_state=...) and skips full login steps when session cookies are valid.
-3. UI Header Branding & Log Drawer: Confirm header title is "Bright Horizon Photo Extractor", Sync chip is removed, and console logs are collapsed by default.
+Bright Horizons Auth & Extraction Investigation and Fix task.
 
-Working directory: /home/antigravity/GitHub/brighthorizon-photo-extractor
+Objective:
+Lead the team to investigate, fix, and verify:
+1. R1: Deep Logging & Network Tracing across FastAPI server, scraper engine, and Playwright Chromium for HTTP requests, status, set-cookie headers, domain origins, and DOM state transitions.
+2. R2: Turnstile Fast-Path & Auth0 Credential Entry (fix solve_and_wait_turnstile when challenge_present=False to immediately proceed to username/password filling without 50s stalls).
+3. R3: Cross-Domain Session Persistence & Media Extraction (ensure initial auth & discover_children perform cross-domain OAuth handshake with mybrightday.brighthorizons.com and persist all session cookies to storage_state.json; ensure background extraction jobs download photos/videos without 401/403 errors).
+4. Run full E2E verification with test credentials (taccani.massarelli@gmail.com / xxTJ8i.5J2KUkkK) and verify live on https://bears.ceoloide.com.
+
 
 

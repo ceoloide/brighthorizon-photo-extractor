@@ -17,15 +17,21 @@ from playwright.sync_api import sync_playwright, BrowserContext, Page
 from backend.database import TenantStorage
 from backend.dom_parser import extract_obj_id_from_url_or_style, get_month_end_date
 
-FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://192.168.1.176:8191/v1")
+try:
+    from playwright_stealth import stealth_sync
+except ImportError:
+    stealth_sync = None
+
+FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://flaresolverr:8191/v1")
 
 def ensure_xvfb_display(width=1280, height=720):
-    """Ensures Xvfb virtual display is active for headful Chromium execution."""
-    os.system("pkill -f Xvfb 2>/dev/null")
-    time.sleep(0.3)
-    os.system(f"Xvfb :99 -screen 0 {width}x{height}x24 > /dev/null 2>&1 &")
+    """Ensures Xvfb virtual display :99 is active without disrupting active concurrent sessions."""
     os.environ["DISPLAY"] = ":99"
-    time.sleep(0.5)
+    res = os.system("xdpyinfo -display :99 >/dev/null 2>&1")
+    if res != 0:
+        os.system("rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null")
+        os.system(f"Xvfb :99 -screen 0 {width}x{height}x24 > /dev/null 2>&1 &")
+        time.sleep(0.5)
 
 def capture_compressed_b64_frame(page: Page, width=1280, height=720) -> Optional[str]:
     """Captures a lightweight JPEG screenshot (quality=45) encoded in Base64 for live preview streaming."""
@@ -56,11 +62,14 @@ def clean_user_data_locks(user_data_dir: str):
 def launch_stealth_persistent_context(playwright_instance, user_data_dir: str, extra_args: list = None, **kwargs):
     """Launches a persistent browser context targeting real system Chrome with anti-bot masking flags."""
     clean_user_data_locks(user_data_dir)
+    ensure_xvfb_display(1280, 720)
+
     args = [
         "--disable-blink-features=AutomationControlled",
         "--no-sandbox",
         "--disable-dev-shm-usage",
-        "--window-size=1280,720"
+        "--window-size=1280,720",
+        "--lang=en-US,en"
     ]
     if extra_args:
         args.extend(extra_args)
@@ -73,6 +82,7 @@ def launch_stealth_persistent_context(playwright_instance, user_data_dir: str, e
         "viewport": {"width": 1280, "height": 720}
     }
     context_kwargs.update(kwargs)
+    context_kwargs.pop("storage_state", None)
 
     # Try launching real system Chrome executable or channel
     chrome_paths = ["/usr/bin/google-chrome-stable", "/usr/bin/google-chrome"]
@@ -83,12 +93,129 @@ def launch_stealth_persistent_context(playwright_instance, user_data_dir: str, e
         context_kwargs["channel"] = "chrome"
 
     try:
-        return playwright_instance.chromium.launch_persistent_context(**context_kwargs)
+        context = playwright_instance.chromium.launch_persistent_context(**context_kwargs)
     except Exception:
         # Fallback to Playwright Chromium binary if system Chrome channel is absent
         context_kwargs.pop("executable_path", None)
         context_kwargs.pop("channel", None)
-        return playwright_instance.chromium.launch_persistent_context(**context_kwargs)
+        context = playwright_instance.chromium.launch_persistent_context(**context_kwargs)
+
+    # Inject anti-bot stealth scripts
+    try:
+        context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+        """)
+    except Exception:
+        pass
+
+    if stealth_sync:
+        for p in context.pages:
+            try:
+                stealth_sync(p)
+            except Exception:
+                pass
+        context.on("page", lambda p: stealth_sync(p))
+
+    state_file = os.path.join(user_data_dir, "storage_state.json")
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, "r", encoding="utf-8") as f:
+                state_data = json.load(f)
+            cookies = state_data.get("cookies", [])
+            if cookies:
+                context.add_cookies(cookies)
+        except Exception:
+            pass
+
+    return context
+
+class NetworkTraceLogger:
+    def __init__(self, job: "ScraperJob"):
+        self.job = job
+        self._enabled = True
+
+    def attach_to_context(self, context: BrowserContext):
+        """Attaches network event listeners to Playwright BrowserContext to trace all pages & frames."""
+        context.on("request", self._on_request)
+        context.on("response", self._on_response)
+        context.on("requestfailed", self._on_request_failed)
+
+    def _redact_headers(self, headers: Dict[str, str]) -> Dict[str, str]:
+        redacted = {}
+        for k, v in headers.items():
+            k_lower = k.lower()
+            if k_lower in ["authorization", "cookie", "set-cookie", "x-auth-token"]:
+                redacted[k] = "[REDACTED]"
+            else:
+                redacted[k] = v
+        return redacted
+
+    def _on_request(self, request):
+        url = request.url
+        if url.startswith("data:") or any(ext in url for ext in [".woff", ".woff2", ".ttf", ".svg", ".css"]):
+            return
+            
+        if any(domain in url for domain in ["brighthorizons", "auth0", "cloudflare", "obj_attachment"]):
+            headers_summary = self._redact_headers(request.headers)
+            self.job.log_structured(
+                level="DEBUG",
+                category="NETWORK_REQ",
+                message=f"--> {request.method} {url}",
+                details={
+                    "method": request.method,
+                    "url": url,
+                    "resource_type": request.resource_type,
+                    "headers": headers_summary
+                }
+            )
+
+    def _on_response(self, response):
+        url = response.url
+        if url.startswith("data:") or any(ext in url for ext in [".woff", ".woff2", ".ttf", ".svg", ".css"]):
+            return
+
+        if any(domain in url for domain in ["brighthorizons", "auth0", "cloudflare", "obj_attachment"]):
+            status = response.status
+            set_cookie_headers = [v for k, v in response.headers.items() if k.lower() == "set-cookie"]
+            
+            details = {
+                "status": status,
+                "url": url,
+                "status_text": response.status_text,
+                "set_cookies_count": len(set_cookie_headers)
+            }
+            if set_cookie_headers:
+                redacted_cookies = []
+                for header in set_cookie_headers:
+                    for part in header.split(","):
+                        cookie_decl = part.split(";")[0].strip()
+                        if "=" in cookie_decl:
+                            name = cookie_decl.split("=")[0].strip()
+                            if name:
+                                redacted_cookies.append(f"{name}=[REDACTED]")
+                details["set_cookies"] = redacted_cookies
+
+            level = "INFO" if status < 400 else ("WARN" if status < 500 else "ERROR")
+            self.job.log_structured(
+                level=level,
+                category="NETWORK_RESP",
+                message=f"<-- HTTP {status} {url}",
+                details=details
+            )
+
+    def _on_request_failed(self, request):
+        url = request.url
+        if any(domain in url for domain in ["brighthorizons", "auth0", "cloudflare", "obj_attachment"]):
+            failure = request.failure
+            self.job.log_structured(
+                level="ERROR",
+                category="NETWORK_FAIL",
+                message=f"X-- FAILED {request.method} {url} | Error: {failure}",
+                details={"url": url, "failure": failure}
+            )
+
 
 class ScraperJob:
     def __init__(self, tenant_storage: TenantStorage, password: str, options: Dict[str, Any], log_callback: Optional[Callable[[str], None]] = None):
@@ -109,6 +236,7 @@ class ScraperJob:
             "current_step": "Initializing",
             "files_downloaded": 0,
             "error": None,
+            "screenshot": None,
             "logs": []
         }
         self._mfa_code: Optional[str] = None
@@ -143,34 +271,74 @@ class ScraperJob:
             if random.random() < 0.15:
                 page.wait_for_timeout(random.randint(100, 220))
 
-    def log(self, message: str):
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        entry = f"[{timestamp}] {message}"
-        self.status["logs"].append(entry)
-        if len(self.status["logs"]) > 200:
+    def _update_screenshot(self, page: Optional[Page] = None):
+        """Captures a lightweight base64 JPEG screenshot of the active Playwright browser page."""
+        p = page or self._active_page
+        if not p:
+            return
+        try:
+            screenshot_bytes = p.screenshot(type="jpeg", quality=40, scale="css")
+            b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+            self.status["screenshot"] = f"data:image/jpeg;base64,{b64}"
+        except Exception:
+            pass
+
+    def log_structured(self, level: str, category: str, message: str, details: Optional[Dict[str, Any]] = None):
+        """Structured logging method storing log messages and calling log_callback."""
+        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        entry_str = f"[{timestamp}] [{level}] [{category}] {message}"
+        
+        self.status["logs"].append(entry_str)
+        if len(self.status["logs"]) > 300:
             self.status["logs"].pop(0)
-        self.log_callback(entry)
+            
+        if self.log_callback:
+            self.log_callback(entry_str)
+
+    def log(self, message: str):
+        self.log_structured("INFO", "GENERAL", message)
 
     def solve_cloudflare_flaresolverr(self, target_url: str) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         """Queries FlareSolverr API to resolve Cloudflare turnstile/bot challenges and return session cookies & matching User-Agent."""
+        start_t = time.time()
+        self.log(f"[FlareSolverr] Initiating pre-flight challenge check for {target_url} via ({FLARESOLVERR_URL})...")
         try:
-            self.log(f"Querying FlareSolverr endpoint ({FLARESOLVERR_URL}) to bypass Cloudflare protection...")
             payload = {
                 "cmd": "request.get",
                 "url": target_url,
                 "maxTimeout": 60000
             }
             resp = requests.post(FLARESOLVERR_URL, json=payload, timeout=70)
+            elapsed = round(time.time() - start_t, 2)
+
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("status") == "ok":
                     solution = data.get("solution", {})
                     cookies = solution.get("cookies", [])
                     user_agent = solution.get("userAgent")
-                    self.log(f"FlareSolverr successfully resolved challenge ({len(cookies)} clearance cookies received).")
+                    
+                    cf_cookies = [c for c in cookies if "cf" in c.get("name", "").lower() or "clearance" in c.get("name", "").lower()]
+                    if cf_cookies:
+                        self.log(f"[FlareSolverr] ✅ SUCCESS: Cloudflare protection detected & solved in {elapsed}s ({len(cf_cookies)} clearance cookies extracted).")
+                    else:
+                        self.log(f"[FlareSolverr] ℹ️ NOT NEEDED: Target page responded cleanly without Cloudflare challenge in {elapsed}s ({len(cookies)} total cookies extracted).")
+                    
                     return cookies, user_agent
+                else:
+                    msg = data.get("message", "Unknown FlareSolverr response error")
+                    self.log(f"[FlareSolverr] ⚠️ UNHELPFUL: Status '{data.get('status')}' after {elapsed}s: {msg} (falling back to native Playwright stealth)")
+            else:
+                self.log(f"[FlareSolverr] ⚠️ HTTP {resp.status_code}: Endpoint error after {elapsed}s (falling back to native Playwright stealth)")
+
+        except requests.exceptions.Timeout:
+            elapsed = round(time.time() - start_t, 2)
+            self.log(f"[FlareSolverr] ⚠️ TIMEOUT: Service request timed out after {elapsed}s (falling back to native Playwright stealth)")
+        except requests.exceptions.ConnectionError:
+            self.log(f"[FlareSolverr] ⚠️ UNREACHABLE: Service at {FLARESOLVERR_URL} is offline or unreachable (falling back to native Playwright stealth)")
         except Exception as e:
-            self.log(f"FlareSolverr request failed (will fall back to native Playwright stealth): {e}")
+            self.log(f"[FlareSolverr] ⚠️ ERROR: Check failed: {e} (falling back to native Playwright stealth)")
+
         return [], None
 
     def cancel(self):
@@ -204,6 +372,10 @@ class ScraperJob:
                     user_data_dir,
                     user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
                 )
+                # Attach NetworkTraceLogger for deep logging & network tracing
+                network_tracer = NetworkTraceLogger(self)
+                network_tracer.attach_to_context(context)
+
                 page: Page = context.pages[0] if context.pages else context.new_page()
                 self._active_page = page
                 
@@ -319,6 +491,13 @@ class ScraperJob:
                     self.status["current_step"] = "Extraction finished successfully"
                     self.log("All extraction tasks completed successfully!")
                 
+                # Persist storage state post extraction
+                try:
+                    context.storage_state(path=state_file)
+                    self.log("Successfully saved final extraction session cookies to storage_state.json")
+                except Exception as e:
+                    self.log(f"Final storage_state save notice: {e}")
+
                 context.close()
                 self._active_page = None
 
@@ -370,23 +549,92 @@ class ScraperJob:
 
         return "unknown"
 
+    def ensure_cross_domain_session(self, page: Page, context: BrowserContext, dependent_id: Optional[str] = None) -> bool:
+        """Ensures active session cookies exist across familyinfocenter and mybrightday origins."""
+        self.log("Verifying cross-domain session cookies on My Bright Day...")
+        
+        # 1. Test existing MyBrightDay API session payload
+        try:
+            resp = page.request.get("https://mybrightday.brighthorizons.com/remote/v1/user_payload", timeout=5000)
+            if resp.status == 200:
+                payload = resp.json()
+                if isinstance(payload, dict) and (payload.get("user") or payload.get("dependents")):
+                    self.log("Valid My Bright Day session cookies confirmed!")
+                    return True
+        except Exception:
+            pass
+
+        # 2. Perform cross-domain handshake from Family Info Center to My Bright Day
+        self.log("Session token missing on My Bright Day; performing cross-domain SSO handshake...")
+        target_url = "https://familyinfocenter.brighthorizons.com/home"
+        try:
+            page.goto(target_url, wait_until="domcontentloaded")
+            page.wait_for_timeout(2000)
+        except Exception as e:
+            self.log(f"Navigation note during SSO handshake: {e}")
+
+        # Trigger SSO redirect via child card My Bright Day link
+        handshake_success = False
+        try:
+            actions_spans = page.locator("span", has_text="Actions").all()
+            for span in actions_spans:
+                try:
+                    span.click()
+                    page.wait_for_timeout(1000)
+                    mbd = page.locator("span.actions-menu-item-label", has_text="My Bright Day").first
+                    if mbd.is_visible():
+                        with context.expect_page() as new_page_info:
+                            mbd.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
+                        mbd_page = new_page_info.value
+                        mbd_page.wait_for_load_state("domcontentloaded")
+                        mbd_page.wait_for_timeout(3000)
+                        handshake_success = True
+                        mbd_page.close()
+                        break
+                except Exception as e:
+                    self.log(f"SSO handshake click notice: {e}")
+        except Exception as e:
+            self.log(f"SSO handshake locator notice: {e}")
+
+        if not handshake_success and dependent_id:
+            # Fallback: Navigate directly with dependent_id
+            try:
+                page.goto(f"https://mybrightday.brighthorizons.com/dashboard/parents.html?dependent_id={dependent_id}", wait_until="domcontentloaded")
+                page.wait_for_timeout(3000)
+            except Exception as e:
+                self.log(f"Direct fallback navigation notice: {e}")
+
+        # 3. Persist updated cross-domain cookies to storage_state.json
+        state_file = os.path.join(self.tenant_storage.user_data_dir, "storage_state.json")
+        try:
+            context.storage_state(path=state_file)
+            self.log(f"Persisted updated cross-domain storage_state to {state_file}")
+        except Exception as e:
+            self.log(f"Storage state update notice: {e}")
+
+        return True
+
     def solve_and_wait_turnstile(self, page: Page, max_wait_sec: int = 50, update_progress_cb: Optional[Callable[[str, int], None]] = None) -> bool:
         """
-        Monitors Cloudflare Turnstile verification via token presence and text signals.
-        Strictly waits for Turnstile clearance before returning.
+        Monitors Cloudflare Turnstile verification with a zero-delay fast-path.
+        If challenge_present=False (no active Turnstile iframe or challenge prompt),
+        returns True within 1.5s to allow instant Auth0 credential entry.
         """
-        self.log(f"[Turnstile] Monitoring Turnstile security check (timeout: {max_wait_sec}s)...")
+        self.log_structured("INFO", "TURNSTILE", f"[Turnstile] Checking Turnstile security check (timeout: {max_wait_sec}s)...", details={"url": page.url})
         if update_progress_cb:
-            update_progress_cb("Waiting for Cloudflare security check...", 2)
+            update_progress_cb("Checking Cloudflare security check...", 2)
 
         start_t = time.time()
         last_click_t = 0.0
         last_log_t = 0.0
+        last_flaresolverr_t = 0.0
+        grace_period_sec = 1.5  # Max grace period to detect dynamic iframe insertion
 
         while time.time() - start_t < max_wait_sec:
-            current_elapsed = int(time.time() - start_t)
+            elapsed = time.time() - start_t
+            current_elapsed = int(elapsed)
             
-            # 1. Primary Check: Check if Cloudflare populated the hidden response token input
+            # 1. Check if Cloudflare populated the response token
             token_populated = False
             try:
                 token_populated = page.evaluate("""() => {
@@ -400,10 +648,12 @@ class ScraperJob:
                 pass
 
             if token_populated:
-                self.log(f"[Turnstile] 🎉 Successfully verified! Response token populated after {current_elapsed}s.")
+                self.log_structured("INFO", "TURNSTILE", f"[Turnstile] 🎉 Successfully verified! Response token populated after {round(elapsed, 2)}s.", details={"elapsed": round(elapsed, 2), "fast_path": True})
                 return True
 
-            # 2. Secondary Check: Gather text content from body and all frames safely
+            # 2. Inspect frames and body text safely
+            has_cf_iframe = any("challenges.cloudflare.com" in f.url for f in page.frames)
+
             body_text = ""
             try:
                 body_text = page.locator("body").inner_text().lower()
@@ -424,45 +674,95 @@ class ScraperJob:
 
             combined = body_text + " " + " ".join(frame_sources)
             
-            if "success!" in combined or "success" in combined or "verified" in combined:
-                self.log(f"[Turnstile] 🎉 Successfully verified ('Success!' text detected) after {current_elapsed}s.")
+            if "success!" in combined or "verified" in combined:
+                self.log_structured("INFO", "TURNSTILE", f"[Turnstile] 🎉 Successfully verified ('Success!' text detected) after {round(elapsed, 2)}s.")
                 return True
 
-            # 3. Check for 'Verify you are human' challenge frame
-            has_challenge = "verify you are human" in combined or "verify you are a human" in combined
+            is_verifying = any(p in combined for p in [
+                "verifying",
+                "verifying...",
+                "checking if the site connection is secure",
+                "checking your browser"
+            ])
+
+            has_challenge = any(p in combined for p in [
+                "verify you are human",
+                "verify you are a human",
+                "verifying you are human",
+                "confirm you are human",
+                "human verification"
+            ])
+
+            is_turnstile_active = has_cf_iframe or is_verifying or has_challenge
+
+            # 3. Fast-Path Bypass: ONLY proceed if NO Cloudflare iframe, verifying state, or challenge prompt exists after grace period
+            if elapsed >= grace_period_sec and not is_turnstile_active:
+                self.log_structured("INFO", "TURNSTILE", f"[Turnstile] ⚡ Fast-Path: No active Cloudflare iframe or security challenge detected after {round(elapsed, 2)}s. Proceeding immediately to Auth0 credential entry...", details={"elapsed": round(elapsed, 2), "challenge_present": False})
+                return True
 
             # Log periodic status update every 5 seconds
             if time.time() - last_log_t >= 5.0:
                 last_log_t = time.time()
-                self.log(f"[Turnstile] Status ({current_elapsed}s): token_populated={token_populated}, cf_frames={len(cf_frames)}, challenge_present={has_challenge}, url={page.url}")
+                self.log_structured("DEBUG", "TURNSTILE", f"[Turnstile] Status ({current_elapsed}s): token_populated={token_populated}, cf_frames={len(cf_frames)}, challenge_present={has_challenge}, is_verifying={is_verifying}, url={page.url}")
 
-            # 4. If challenge frame is present, attempt click if unverified for > 4s
-            if cf_frames and (time.time() - last_click_t > 4.0):
+            # 4. If challenge frame is present, attempt human mouse click on Turnstile checkbox element if unverified for > 3.0s
+            if cf_frames and (time.time() - last_click_t > 3.0):
                 for cf_frame, f_text in cf_frames:
-                    self.log(f"[Turnstile] Attempting verification click on Cloudflare frame (URL: {cf_frame.url[:60]}...)...")
+                    self.log_structured("INFO", "TURNSTILE", f"[Turnstile] Attempting verification click on Cloudflare frame (URL: {cf_frame.url[:60]}...)...")
                     try:
+                        # Strategy A: Direct frame body click at (30, 30) where Turnstile checkbox resides
                         cf_frame.click("body", position={"x": 30, "y": 30})
                         last_click_t = time.time()
                         page.wait_for_timeout(1000)
                     except Exception as e:
-                        self.log(f"[Turnstile] Click note: {e}")
+                        try:
+                            # Strategy B: Top-level page human mouse movement to iframe bounding box
+                            iframe_loc = page.locator("iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile']").first
+                            if iframe_loc.count() > 0 and iframe_loc.is_visible():
+                                box = iframe_loc.bounding_box()
+                                if box and box['width'] > 0 and box['height'] > 0:
+                                    target_x = box['x'] + min(35.0, box['width'] / 2)
+                                    target_y = box['y'] + min(35.0, box['height'] / 2)
+                                    self.log_structured("INFO", "TURNSTILE", f"[Turnstile] Moving human mouse to iframe box ({round(target_x, 1)}, {round(target_y, 1)})...")
+                                    page.mouse.move(target_x, target_y, steps=10)
+                                    page.wait_for_timeout(100)
+                                    page.mouse.click(target_x, target_y)
+                                    last_click_t = time.time()
+                                    page.wait_for_timeout(1000)
+                        except Exception as e2:
+                            self.log_structured("WARN", "TURNSTILE", f"[Turnstile] Click note: {e2}")
+
+            # 5. Fallback: If challenge remains active after 8 seconds, request clearance from FlareSolverr service
+            if has_challenge and (elapsed > 8.0) and (time.time() - last_flaresolverr_t > 12.0):
+                last_flaresolverr_t = time.time()
+                self.log_structured("INFO", "TURNSTILE", f"[Turnstile] Challenge prompt active after {round(elapsed, 1)}s. Requesting FlareSolverr clearance cookies for {page.url[:60]}...")
+                try:
+                    solver_cookies, solver_ua = self.solve_cloudflare_flaresolverr(page.url)
+                    if solver_cookies:
+                        page.context.add_cookies(solver_cookies)
+                        self.log_structured("INFO", "TURNSTILE", f"[Turnstile] Injected {len(solver_cookies)} FlareSolverr clearance cookies into browser context.")
+                        page.wait_for_timeout(1500)
+                except Exception as e:
+                    self.log_structured("WARN", "TURNSTILE", f"[Turnstile] FlareSolverr fallback note: {e}")
 
             page.wait_for_timeout(250)
 
         # 5. Post-timeout strict failure assessment
+        final_token = False
         try:
-            token_populated = page.evaluate("""() => {
+            final_token = page.evaluate("""() => {
                 const inputs = document.querySelectorAll("input[name='cf-turnstile-response'], input[name='g-recaptcha-response']");
                 for (const input of inputs) {
                     if (input.value && input.value.trim().length > 10) return true;
                 }
                 return false;
             }""")
-            if token_populated:
-                self.log(f"[Turnstile] 🎉 Successfully verified! Response token populated on final check.")
-                return True
         except Exception:
             pass
+
+        if final_token:
+            self.log_structured("INFO", "TURNSTILE", f"[Turnstile] 🎉 Verified: Token populated after monitoring window.")
+            return True
 
         final_body = ""
         try:
@@ -473,11 +773,11 @@ class ScraperJob:
         final_frames = " ".join([f.locator("body").inner_text().lower() for f in page.frames if "challenges.cloudflare.com" in f.url])
         final_combined = final_body + " " + final_frames
 
-        if "verify you are human" in final_combined or "verify you are a human" in final_combined:
-            self.log("[Turnstile] ❌ Verification failed: Cloudflare 'Verify you are human' challenge remained unsolved.")
+        if ("verify you are human" in final_combined or "verify you are a human" in final_combined) and not final_token:
+            self.log_structured("ERROR", "TURNSTILE", "[Turnstile] ❌ Verification failed: Cloudflare 'Verify you are human' challenge remained unsolved.")
             raise Exception("Cloudflare Turnstile verification failed. Please try again.")
 
-        self.log(f"[Turnstile] Monitoring window ended after {max_wait_sec}s. Token not detected.")
+        self.log_structured("INFO", "TURNSTILE", f"[Turnstile] Monitoring window ended after {max_wait_sec}s. Proceeding...")
         return True
 
     def check_auth0_errors(self, page: Page):
@@ -539,13 +839,31 @@ class ScraperJob:
                     page.wait_for_timeout(1000)
                 except Exception:
                     pass
-                try:
-                    page.context.clear_cookies()
-                except Exception:
-                    pass
+                if force_fresh_auth:
+                    try:
+                        page.context.clear_cookies()
+                    except Exception:
+                        pass
+
+                    # Deep clear browser cookies and origin storage via Chrome DevTools Protocol (CDP)
+                    try:
+                        cdp = page.context.new_cdp_session(page)
+                        cdp.send("Network.clearBrowserCookies")
+                        cdp.send("Storage.clearDataForOrigin", {"origin": "https://bhloginsso.brighthorizons.com", "storageTypes": "all"})
+                        cdp.send("Storage.clearDataForOrigin", {"origin": "https://familyinfocenter.brighthorizons.com", "storageTypes": "all"})
+                        cdp.send("Storage.clearDataForOrigin", {"origin": "https://mybrightday.brighthorizons.com", "storageTypes": "all"})
+                    except Exception as e:
+                        self.log(f"CDP session clear notice: {e}")
+
                 page.goto("https://familyinfocenter.brighthorizons.com/okta/login", wait_until="domcontentloaded")
                 state = self.detect_page_state(page, max_wait_sec=15)
                 self.log(f"Post-logout refreshed page state: '{state}' (URL: {page.url})")
+
+                # If state is still 'authenticated', navigate directly to login form
+                if state == "authenticated":
+                    self.log("Page remained on authenticated home; navigating explicitly to login trigger...")
+                    page.goto("https://familyinfocenter.brighthorizons.com/okta/login", wait_until="domcontentloaded")
+                    state = self.detect_page_state(page, max_wait_sec=15)
 
         # Step 1: Wait for and click Landing Page "Log In" button
         if state == "landing_login_btn":
@@ -560,30 +878,31 @@ class ScraperJob:
         if state in ["auth0_username", "auth0_password"]:
             self.log("Auth0 SSO login form loaded.")
             
-            if state == "auth0_username":
-                username_inp = page.locator("input[name='username'], input[id='username'], input[type='email']").first
-                username_inp.wait_for(state="visible", timeout=30000)
-                
-                # Step 2: Solve & confirm Cloudflare Turnstile verification FIRST
-                if not self.solve_and_wait_turnstile(page, max_wait_sec=50, update_progress_cb=update_progress_cb):
-                    raise Exception("Cloudflare Turnstile security verification failed.")
+            # Step 1: Handle Email / Username Entry
+            username_inp = page.locator("input[name='username'], input[id='username'], input[type='email']").first
+            if username_inp.count() > 0 and username_inp.is_visible():
+                curr_val = username_inp.input_value()
+                if not curr_val or curr_val.strip() == "":
+                    # Solve / Fast-path Turnstile before typing email
+                    if not self.solve_and_wait_turnstile(page, max_wait_sec=50, update_progress_cb=update_progress_cb):
+                        raise Exception("Cloudflare Turnstile security verification failed.")
 
-                # Step 3: Fill email address AFTER Turnstile verification succeeds
-                self.log("Cloudflare Turnstile verified! Filling email address into SSO username input...")
-                if update_progress_cb: update_progress_cb("Filling email address...", 2)
-                
-                page.fill("input[name='username'], input[id='username'], input[type='email']", self.email)
-                self.log("Pressing Enter to submit email...")
-                page.keyboard.press("Enter")
+                    self.log("Filling email address into SSO username input...")
+                    if update_progress_cb: update_progress_cb("Filling email address...", 2)
+                    page.fill("input[name='username'], input[id='username'], input[type='email']", self.email)
                     
-                # Dynamically wait for password input or error message
-                try:
-                    page.locator("input[name='password']:not(.hide), input[id='password'], span#error-element-username, div#error-element-username, .ulp-input-error-message").first.wait_for(state="visible", timeout=12000)
-                except Exception:
-                    pass
-                self.check_auth0_errors(page)
+                    # If password field is not yet visible, press Enter to submit username step
+                    pwd_inp_check = page.locator("input[name='password']:not(.hide), input[id='password']").first
+                    if pwd_inp_check.count() == 0 or not pwd_inp_check.is_visible():
+                        self.log("Submitting email step...")
+                        page.keyboard.press("Enter")
+                        try:
+                            page.locator("input[name='password']:not(.hide), input[id='password'], span#error-element-username, div#error-element-username, .ulp-input-error-message").first.wait_for(state="visible", timeout=12000)
+                        except Exception:
+                            pass
+                        self.check_auth0_errors(page)
 
-            # Step 3: Type password & submit
+            # Step 2: Handle Password Entry
             pwd_inp = page.locator("input[name='password']:not(.hide), input[id='password']").first
             pwd_inp.wait_for(state="visible", timeout=30000)
             
@@ -650,17 +969,38 @@ class ScraperJob:
                 self.check_auth0_errors(page)
                 self.status["state"] = "running"
                 
-            # Step 6: Verify portal home page load
-            self.log("Waiting for post-login redirection to portal home...")
-            try:
-                page.wait_for_selector("span:has-text('Actions'), h1", timeout=20000)
-            except Exception:
-                pass
-            
-            # Final check for error elements on SSO form
-            self.check_auth0_errors(page)
+            # Step 6: Verify portal home page load with fast-react polling (up to 45s timeout)
+            self.log("Waiting for post-login redirection to portal home (fast-react polling up to 45s)...")
+            start_poll = time.time()
+            max_timeout = 45.0
+            auth_confirmed = False
+
+            while time.time() - start_poll < max_timeout:
+                self.check_auth0_errors(page)
                 
-            self.log(f"Authenticated state verified! Current URL: {page.url}")
+                try:
+                    # Check for child card "Actions" dropdown trigger or home dashboard headings
+                    if page.locator("span:has-text('Actions')").count() > 0:
+                        elapsed = round(time.time() - start_poll, 2)
+                        self.log(f"Portal home authenticated DOM element ('Actions') detected in {elapsed}s!")
+                        auth_confirmed = True
+                        break
+
+                    # Also check for child card full-name heading on familyinfocenter home page
+                    if "familyinfocenter" in page.url.lower() and page.locator("div.card h1, div.child-card h1, h1.child-name, h1:has-text('Taccani')").count() > 0:
+                        elapsed = round(time.time() - start_poll, 2)
+                        self.log(f"Portal home authenticated DOM element ('child card heading') detected in {elapsed}s!")
+                        auth_confirmed = True
+                        break
+                except Exception:
+                    pass
+
+                page.wait_for_timeout(250) # Active poll every 250ms for immediate reaction
+
+            if not auth_confirmed:
+                self.log(f"Polling window ended after {max_timeout}s without explicit DOM marker. Current URL: {page.url}")
+            else:
+                self.log(f"Authenticated state verified! Current URL: {page.url}")
 
     def verify_imported_session(self, update_progress_cb: Optional[Callable[[str, int], None]] = None) -> List[Dict[str, str]]:
         """
@@ -776,6 +1116,8 @@ class ScraperJob:
         update_progress("Bypassing Cloudflare turnstile protection via FlareSolverr...", 1, None, force_shot=False)
         
         user_data_dir = self.tenant_storage.user_data_dir
+        # Purge existing browser profile session before pre-verification to force a fresh login
+        self.tenant_storage.clear_session()
         clean_user_data_locks(user_data_dir)
         clearance_cookies, solver_ua = self.solve_cloudflare_flaresolverr("https://familyinfocenter.brighthorizons.com/home")
         
@@ -827,6 +1169,14 @@ class ScraperJob:
                 if not children:
                     update_progress("Verification failed: No child profiles found.", 3, page=page, force_shot=True)
                     raise Exception("Authentication succeeded, but no active child profiles were discovered for this account.")
+
+                # Save authenticated storage state to disk
+                state_file = os.path.join(user_data_dir, "storage_state.json")
+                try:
+                    context.storage_state(path=state_file)
+                    self.log(f"Successfully persisted authenticated storage state to {state_file}")
+                except Exception as e:
+                    self.log(f"Storage state save notice: {e}")
 
                 # Calculate cookie expiration timestamp (or default to 15m / 900s)
                 all_cookies = context.cookies()
@@ -891,21 +1241,26 @@ class ScraperJob:
                     
                     # Target specific dropdown item
                     mbd = page.locator("span.actions-menu-item-label", has_text="My Bright Day").first
-                    mbd.wait_for(state="visible", timeout=4000)
-                    
-                    with context.expect_page() as new_page_info:
-                        mbd.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
+                    try:
+                        mbd.wait_for(state="visible", timeout=3000)
+                        with context.expect_page() as new_page_info:
+                            mbd.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
+                            
+                        new_page = new_page_info.value
+                        new_page.wait_for_load_state("domcontentloaded", timeout=12000)
                         
-                    new_page = new_page_info.value
-                    new_page.wait_for_load_state("domcontentloaded", timeout=12000)
-                    
-                    m = re.search(r'dependent_id=([^&]+)', new_page.url)
-                    if m:
-                        dep_id = m.group(1)
-                        children.append({"name": given_name, "dependent_id": dep_id})
-                        self.log(f"Discovered child: {given_name} (dependent_id: {dep_id[:8]}...)")
-                        
-                    new_page.close()
+                        m = re.search(r'dependent_id=([^&]+)', new_page.url)
+                        if m:
+                            dep_id = m.group(1)
+                            children.append({"name": given_name, "dependent_id": dep_id})
+                            self.log(f"Discovered child: {given_name} (dependent_id: {dep_id[:8]}...)")
+                            
+                        new_page.close()
+                    finally:
+                        # Close CDK overlay menu if open before processing next card
+                        try: page.keyboard.press("Escape")
+                        except Exception: pass
+                        page.wait_for_timeout(500)
                 except Exception as e:
                     self.log(f"Skipped child card #{idx + 1} (may not have active enrollment): {e}")
                     
@@ -995,9 +1350,29 @@ class ScraperJob:
             else:
                 tf_li.click()
                 
-            page.wait_for_timeout(3000)
-            
-            # Scroll to trigger lazy loading
+            # Smart Month Feed Monitor: Wait for 'no events for the month' indicator or rendered feed thumbnails
+            is_empty_month = False
+            start_month_wait = time.time()
+            while time.time() - start_month_wait < 10.0:
+                # 1. Check if Knockout 'no events for the month' div/h1 container is visible
+                empty_loc = page.locator("h1:has-text('no events for the month'), div:has-text('no events for the month')").first
+                if empty_loc.count() > 0 and empty_loc.is_visible():
+                    is_empty_month = True
+                    break
+                    
+                # 2. Check if timeline feed items are present in left panel
+                timeline_check = page.locator("div.well.left-panel.pull-left")
+                items_check = timeline_check.locator("ul.thumbnails li").all() if timeline_check.count() > 0 else page.locator("ul.thumbnails li").all()
+                if len(items_check) > 0:
+                    break
+                    
+                page.wait_for_timeout(200)
+
+            if is_empty_month:
+                self.log(f"Timeframe month '{tf_text}' has no events ('no events for the month' detected). Advancing to next month immediately...")
+                continue
+                
+            # Scroll to trigger lazy loading for months with posts
             self.scroll_and_load(page)
             
             # Scope timeline search inside left panel (rule 2.B in AGENTS.md)
@@ -1024,16 +1399,23 @@ class ScraperJob:
                     if not obj_id:
                         continue
                     
-                    # Check incremental sync stop condition
+                    # Check manifest for existing item
                     existing_entry = False
+                    existing_manifest_entry = None
                     for m_id, entry in manifest.items():
                         if entry.get("obj_id") == obj_id:
                             existing_entry = True
+                            existing_manifest_entry = entry
                             break
                             
-                    if existing_entry and self.sync_mode == "incremental":
-                        self.log(f"Incremental sync hit existing obj_id {obj_id[:8]}... Stopping child feed scan.")
-                        return
+                    if existing_entry:
+                        fn = existing_manifest_entry.get("original_filename", "media") if existing_manifest_entry else "media"
+                        if self.sync_mode == "incremental":
+                            self.log(f"[Incremental Sync] Hit existing item obj_id {obj_id[:8]}... ('{fn}'). Halting child feed scan.")
+                            return
+                        else:
+                            self.log(f"[Skipped / Existing] Item obj_id {obj_id[:8]}... already downloaded as '{fn}'. Skipping.")
+                            continue
 
                     # Parse date overlay
                     overlay_span = item.locator("span.name span").first
@@ -1046,6 +1428,8 @@ class ScraperJob:
                         self.log(f"Post date {date_str} is before custom start date {self.start_date}. Skipping.")
                         continue
                         
+                    self.log(f"[Downloading] Intercepted new media item (obj_id: {obj_id[:8]}..., type: {'video' if is_video else 'photo'}, date: {date_str}). Fetching binary...")
+                        
                     # Extract full res URL while preserving exact query string parameters (&key=...)
                     resolved_clean = html.unescape(resolved_url).strip()
                     if resolved_clean.startswith("http"):
@@ -1055,12 +1439,16 @@ class ScraperJob:
                     else:
                         download_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={obj_id}&key={obj_id}"
                     
-                    # Fetch file bytes via Playwright request with 120s timeout & retries
+                    # Fetch file bytes via Playwright request with Referer header & in-flight session refresh on 401/403
                     file_bytes = None
                     mime_type = "video/mp4" if is_video else "image/jpeg"
+                    req_headers = {
+                        "Referer": "https://mybrightday.brighthorizons.com/dashboard/parents.html",
+                        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+                    }
                     for attempt in range(3):
                         try:
-                            response = page.request.get(download_url, timeout=120000)
+                            response = page.request.get(download_url, headers=req_headers, timeout=120000)
                             if response.status == 200:
                                 body_data = response.body()
                                 # Unpack Bright Horizons signed_url JSON if returned
@@ -1070,7 +1458,8 @@ class ScraperJob:
                                         signed_url = json_data["signed_url"]
                                         if "mime_type" in json_data and json_data["mime_type"]:
                                             mime_type = json_data["mime_type"]
-                                        media_resp = page.request.get(signed_url, timeout=120000)
+                                        # Fetch signed CDN URL with standard User-Agent header
+                                        media_resp = page.request.get(signed_url, headers={"User-Agent": req_headers["User-Agent"]}, timeout=120000)
                                         if media_resp.status == 200:
                                             file_bytes = media_resp.body()
                                             break
@@ -1081,8 +1470,9 @@ class ScraperJob:
                                         mime_type = header_mime
                                     break
                             elif response.status in [401, 403]:
-                                self.log(f"HTTP {response.status} when fetching obj_id {obj_id[:8]}... Session may be invalid.")
-                                break
+                                self.log(f"HTTP {response.status} when fetching obj_id {obj_id[:8]}... Session may be invalid. Triggering in-flight session refresh...")
+                                self.ensure_cross_domain_session(page, context, dependent_id=dep_id)
+                                time.sleep(2.0)
                             else:
                                 self.log(f"HTTP {response.status} attempt #{attempt + 1} for obj_id {obj_id[:8]}...")
                         except Exception as fetch_err:
@@ -1206,3 +1596,82 @@ def set_eastern_timestamp(file_path: str, date_str: str):
         os.utime(file_path, (epoch, epoch))
     except Exception as e:
         print(f"Timestamp set error: {e}")
+
+def redownload_single_media_item(tenant_storage: TenantStorage, media_id: str) -> Dict[str, Any]:
+    """Re-downloads a specific photo or video from My Bright Day by media_id."""
+    manifest = tenant_storage.load_manifest()
+    if media_id not in manifest:
+        raise Exception(f"Media item '{media_id}' not found in manifest.")
+        
+    entry = manifest[media_id]
+    obj_id = entry.get("obj_id")
+    date_str = entry.get("date", datetime.now().strftime("%Y-%m-%d"))
+    child_name = entry.get("child", "Child")
+    mime_type = entry.get("mime_type", "image/jpeg")
+    
+    if not obj_id:
+        raise Exception(f"Media item '{media_id}' missing obj_id parameter.")
+        
+    download_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={obj_id}&key={obj_id}"
+    req_headers = {
+        "Referer": "https://mybrightday.brighthorizons.com/dashboard/parents.html",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    }
+    
+    user_data_dir = tenant_storage.user_data_dir
+    with sync_playwright() as p:
+        context = p.chromium.launch_persistent_context(
+            user_data_dir=user_data_dir,
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+        )
+        page = context.new_page()
+        try:
+            state_file = os.path.join(user_data_dir, "storage_state.json")
+            if os.path.exists(state_file):
+                try:
+                    with open(state_file, "r") as f:
+                        state_data = json.load(f)
+                    context.add_cookies(state_data.get("cookies", []))
+                except Exception:
+                    pass
+
+            response = page.request.get(download_url, headers=req_headers, timeout=60000)
+            file_bytes = None
+            if response.status == 200:
+                body_data = response.body()
+                try:
+                    json_data = json.loads(body_data.decode("utf-8"))
+                    if isinstance(json_data, dict) and "signed_url" in json_data:
+                        signed_url = json_data["signed_url"]
+                        if "mime_type" in json_data and json_data["mime_type"]:
+                            mime_type = json_data["mime_type"]
+                        media_resp = page.request.get(signed_url, headers={"User-Agent": req_headers["User-Agent"]}, timeout=60000)
+                        if media_resp.status == 200:
+                            file_bytes = media_resp.body()
+                except Exception:
+                    file_bytes = body_data
+
+            if not file_bytes:
+                raise Exception(f"HTTP {response.status} failed retrieving media stream from My Bright Day.")
+                
+            orig_filename = entry.get("original_filename", f"{child_name} {date_str}.jpg")
+            comment_text = entry.get("comment", f"Bright Horizons photo for {child_name} on {date_str}")
+            
+            # Save updated entry to tenant storage
+            updated_entry = tenant_storage.add_media_entry(
+                obj_id=obj_id,
+                child=child_name,
+                date_str=date_str,
+                original_filename=orig_filename,
+                comment=comment_text,
+                file_bytes=file_bytes,
+                mime_type=mime_type
+            )
+            
+            abs_path = os.path.join(tenant_storage.tenant_dir, updated_entry["storage_path"])
+            set_eastern_timestamp(abs_path, date_str)
+            return updated_entry
+        finally:
+            try: context.close()
+            except Exception: pass

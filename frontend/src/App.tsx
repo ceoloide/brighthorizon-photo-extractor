@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { LoginForm } from './components/LoginForm';
 import { Dashboard } from './components/Dashboard';
+import { Footer } from './components/Footer';
 
 export const App: React.FC = () => {
   const [token, setToken] = useState<string | null>(localStorage.getItem('bh_token'));
@@ -70,12 +71,15 @@ export const App: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
-      {token && email ? (
-        <Dashboard token={token} email={email} childrenList={childrenList} onLogout={handleLogout} />
-      ) : (
-        <LoginForm onLoginSuccess={(validToken, data) => handleSessionSuccess(data?.email || '', data?.children, validToken)} />
-      )}
+    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col justify-between">
+      <main className="flex-1 flex flex-col">
+        {token && email ? (
+          <Dashboard token={token} email={email} childrenList={childrenList} onLogout={handleLogout} />
+        ) : (
+          <LoginForm onLoginSuccess={(validToken, data) => handleSessionSuccess(data?.email || '', data?.children, validToken)} />
+        )}
+      </main>
+      <Footer />
     </div>
   );
 };

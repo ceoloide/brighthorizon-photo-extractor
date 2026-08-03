@@ -1,0 +1,194 @@
+# SPDX-License-Identifier: MIT
+"""
+Unit tests for backend/dom_parser.py.
+"""
+
+from unittest.mock import MagicMock
+from backend.dom_parser import (
+    is_valid_timeframe_text,
+    parse_date_overlay,
+    extract_obj_id_from_url_or_style,
+    parse_timeframe_links,
+    click_timeframe_tile,
+    extract_feed_items,
+    discover_children_from_family_info,
+    dismiss_cdk_overlays
+)
+
+def test_is_valid_timeframe_text():
+    assert is_valid_timeframe_text("jun 2026") is True
+    assert is_valid_timeframe_text("NOV 2024") is True
+    assert is_valid_timeframe_text("  dec 2025  ") is True
+    assert is_valid_timeframe_text("jan 2020") is True
+
+    # Invalid patterns
+    assert is_valid_timeframe_text("Selected Jun 2026 (12 items)") is False
+    assert is_valid_timeframe_text("All Months") is False
+    assert is_valid_timeframe_text("2026") is False
+    assert is_valid_timeframe_text("") is False
+    assert is_valid_timeframe_text(None) is False
+    assert is_valid_timeframe_text("June 2026") is False  # 4 letters
+
+
+def test_parse_date_overlay():
+    assert parse_date_overlay("6/15", timeframe_year=2026) == "2026-06-15"
+    assert parse_date_overlay("06/15/2025") == "2025-06-15"
+    assert parse_date_overlay("6/15/26") == "2026-06-15"
+    assert parse_date_overlay("12/31", timeframe_year=2024) == "2024-12-31"
+
+    # Fallback default
+    res_empty = parse_date_overlay("", timeframe_year=2026)
+    assert res_empty.startswith("2026-")
+
+
+def test_extract_obj_id_from_url_or_style():
+    # Photo post with raw href containing HTML entity &amp;
+    photo_href = "/remote/v1/obj_attachment?obj=12345&amp;key=12345"
+    obj_id, is_video, resolved = extract_obj_id_from_url_or_style(photo_href, "")
+    assert obj_id == "12345"
+    assert is_video is False
+    assert resolved == "/remote/v1/obj_attachment?obj=12345&key=12345"
+
+    # Video post with anchor href and style attribute background-image
+    video_href = "#6986168d2bb117b0dc910b3b-default"
+    video_style = "background-image: url('/remote/v1/obj_attachment?obj=6986168d2bb117b0dc910b3b&amp;key=6986168d2bb117b0dc910b3b');"
+    obj_id, is_video, resolved = extract_obj_id_from_url_or_style(video_href, video_style)
+    assert obj_id == "6986168d2bb117b0dc910b3b"
+    assert is_video is True
+    assert "obj=6986168d2bb117b0dc910b3b" in resolved
+
+    # Invalid post (no obj parameter)
+    obj_id, is_video, resolved = extract_obj_id_from_url_or_style("#invalid", "color: red;")
+    assert obj_id is None
+    assert is_video is True
+
+
+def test_parse_timeframe_links_mock():
+    mock_page = MagicMock()
+
+    mock_li1 = MagicMock()
+    mock_li1.inner_text.return_value = "jun 2026"
+    mock_tile1 = MagicMock()
+    mock_tile1.count.return_value = 1
+    mock_li1.locator.return_value.first = mock_tile1
+
+    mock_li2 = MagicMock()
+    mock_li2.inner_text.return_value = "invalid text"
+
+    mock_li3 = MagicMock()
+    mock_li3.inner_text.return_value = "nov 2024"
+    mock_tile3 = MagicMock()
+    mock_tile3.count.return_value = 0
+    mock_li3.locator.return_value.first = mock_tile3
+
+    mock_page.locator.return_value.all.return_value = [mock_li1, mock_li2, mock_li3]
+
+    items = parse_timeframe_links(mock_page)
+    assert len(items) == 2
+
+    assert items[0]["text"] == "jun 2026"
+    assert items[0]["year"] == 2026
+    assert items[0]["month"] == 6
+    assert items[0]["tile_locator"] == mock_tile1
+
+    assert items[1]["text"] == "nov 2024"
+    assert items[1]["year"] == 2024
+    assert items[1]["month"] == 11
+    assert items[1]["tile_locator"] == mock_li3
+
+
+def test_click_timeframe_tile_mock():
+    mock_page = MagicMock()
+
+    # Test with dict input containing tile_locator
+    mock_tile = MagicMock()
+    tf_item = {"tile_locator": mock_tile}
+    res = click_timeframe_tile(mock_page, tf_item)
+    assert res is True
+    mock_tile.click.assert_called_once()
+
+    # Test with direct locator input
+    mock_direct_loc = MagicMock()
+    res2 = click_timeframe_tile(mock_page, mock_direct_loc)
+    assert res2 is True
+    mock_direct_loc.click.assert_called_once()
+
+
+def test_extract_feed_items_scoping_mock():
+    mock_page = MagicMock()
+    mock_timeline = MagicMock()
+
+    # Test strict Rule 2.B scoping: timeline absent
+    mock_timeline.count.return_value = 0
+    mock_page.locator.return_value = mock_timeline
+
+    items = extract_feed_items(mock_page)
+    assert items == []  # Must return empty list, not call global locator!
+
+    # Test when timeline present
+    mock_timeline.count.return_value = 1
+
+    mock_item1 = MagicMock()
+    mock_fancybox1 = MagicMock()
+    mock_fancybox1.count.return_value = 1
+    mock_fancybox1.get_attribute.return_value = "/remote/v1/obj_attachment?obj=p100"
+
+    mock_tile = MagicMock()
+    mock_tile.count.return_value = 0
+    mock_tile.get_attribute.return_value = ""
+
+    mock_span = MagicMock()
+    mock_span.count.return_value = 1
+    mock_span.inner_text.return_value = "6/10"
+
+    def item_locator_side_effect(sel):
+        if sel == "a.fancybox":
+            return MagicMock(first=mock_fancybox1)
+        elif sel == "div.tile.pointable, div.tile":
+            return MagicMock(first=mock_tile)
+        elif sel == "span.name span":
+            return MagicMock(first=mock_span)
+        return MagicMock()
+
+    mock_item1.locator.side_effect = item_locator_side_effect
+    mock_timeline.locator.return_value.all.return_value = [mock_item1]
+
+    parsed = extract_feed_items(mock_page, timeframe_year=2026)
+    assert len(parsed) == 1
+    assert parsed[0]["obj_id"] == "p100"
+    assert parsed[0]["media_type"] == "photo"
+    assert parsed[0]["date_str"] == "2026-06-10"
+
+
+def test_discover_children_from_family_info_mock():
+    mock_page = MagicMock()
+    mock_context = MagicMock()
+    mock_page.url = "https://familyinfocenter.brighthorizons.com/home"
+
+    mock_span = MagicMock()
+    mock_span.evaluate.return_value = "Byron Taccani Massarelli"
+    mock_page.locator.return_value.all.return_value = [mock_span]
+
+    mock_mbd_item = MagicMock()
+    mock_mbd_item.wait_for.return_value = None
+    mock_page.locator.return_value.first = mock_mbd_item
+
+    mock_new_page = MagicMock()
+    mock_new_page.url = "https://mybrightday.brighthorizons.com/dashboard/parents.html?dependent_id=673e065a9d37c9fab2483b2d"
+
+    mock_expect_context = MagicMock()
+    mock_expect_context.value = mock_new_page
+    mock_context.expect_page.return_value.__enter__.return_value = mock_expect_context
+
+    children = discover_children_from_family_info(mock_page, mock_context)
+    assert len(children) == 1
+    assert children[0]["name"] == "Byron"
+    assert children[0]["given_name"] == "Byron"
+    assert children[0]["full_name"] == "Byron Taccani Massarelli"
+    assert children[0]["dependent_id"] == "673e065a9d37c9fab2483b2d"
+
+
+def test_dismiss_cdk_overlays():
+    mock_page = MagicMock()
+    dismiss_cdk_overlays(mock_page)
+    mock_page.keyboard.press.assert_called_once_with("Escape")

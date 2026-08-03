@@ -11,7 +11,8 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronsDown,
-  ChevronsUp
+  ChevronsUp,
+  RefreshCw
 } from 'lucide-react';
 
 interface MediaItem {
@@ -57,6 +58,29 @@ export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null);
   const [openMonths, setOpenMonths] = useState<Record<string, boolean>>({});
   const [loadedMedia, setLoadedMedia] = useState<Record<string, boolean>>({});
+  const [isRedownloading, setIsRedownloading] = useState<boolean>(false);
+  const [cacheBuster, setCacheBuster] = useState<number>(Date.now());
+
+  const handleRedownload = async (mediaId: string) => {
+    setIsRedownloading(true);
+    try {
+      const res = await fetch(`/api/media/${mediaId}/redownload`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setCacheBuster(Date.now());
+        await fetchMedia(false);
+      } else {
+        alert(data.detail || 'Re-download failed.');
+      }
+    } catch (err: any) {
+      alert(`Re-download error: ${err.message || err}`);
+    } finally {
+      setIsRedownloading(false);
+    }
+  };
 
   const handleMediaLoaded = (id: string) => {
     setLoadedMedia((prev) => ({ ...prev, [id]: true }));
@@ -358,6 +382,16 @@ export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
                 <p className="text-[11px] text-slate-500 mt-0.5">{activeItem.child} • {activeItem.date}</p>
               </div>
               <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => handleRedownload(activeItem.media_id)}
+                  disabled={isRedownloading}
+                  className={`p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition border border-slate-200 min-w-[40px] min-h-[40px] flex items-center justify-center ${
+                    isRedownloading ? 'opacity-50 cursor-not-allowed' : ''
+                  }`}
+                  title="Force re-download media file from My Bright Day"
+                >
+                  <RefreshCw className={`w-4 h-4 text-indigo-600 ${isRedownloading ? 'animate-spin' : ''}`} />
+                </button>
                 <a
                   href={`/api/media/${activeItem.media_id}?token=${token}`}
                   download={activeItem.original_filename}
@@ -378,14 +412,16 @@ export const Gallery: React.FC<GalleryProps> = ({ token, refreshTrigger }) => {
             <div className="p-2 sm:p-4 flex-1 flex items-center justify-center overflow-auto bg-slate-900 min-h-[250px]">
               {isItemVideo(activeItem) ? (
                 <video
-                  src={`/api/media/${activeItem.media_id}?token=${token}`}
+                  key={`${activeItem.media_id}-${cacheBuster}`}
+                  src={`/api/media/${activeItem.media_id}?token=${token}&cb=${cacheBuster}`}
                   controls
                   autoPlay
                   className="max-h-[65vh] w-full object-contain rounded-xl"
                 />
               ) : (
                 <img
-                  src={`/api/media/${activeItem.media_id}?token=${token}`}
+                  key={`${activeItem.media_id}-${cacheBuster}`}
+                  src={`/api/media/${activeItem.media_id}?token=${token}&cb=${cacheBuster}`}
                   alt={activeItem.original_filename}
                   className="max-h-[65vh] w-auto max-w-full object-contain rounded-xl"
                 />
