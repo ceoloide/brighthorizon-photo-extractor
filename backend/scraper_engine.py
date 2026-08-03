@@ -152,24 +152,45 @@ class ScraperJob:
 
     def solve_cloudflare_flaresolverr(self, target_url: str) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         """Queries FlareSolverr API to resolve Cloudflare turnstile/bot challenges and return session cookies & matching User-Agent."""
+        start_t = time.time()
+        self.log(f"[FlareSolverr] Initiating pre-flight challenge check for {target_url} via ({FLARESOLVERR_URL})...")
         try:
-            self.log(f"Querying FlareSolverr endpoint ({FLARESOLVERR_URL}) to bypass Cloudflare protection...")
             payload = {
                 "cmd": "request.get",
                 "url": target_url,
                 "maxTimeout": 60000
             }
             resp = requests.post(FLARESOLVERR_URL, json=payload, timeout=70)
+            elapsed = round(time.time() - start_t, 2)
+
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("status") == "ok":
                     solution = data.get("solution", {})
                     cookies = solution.get("cookies", [])
                     user_agent = solution.get("userAgent")
-                    self.log(f"FlareSolverr successfully resolved challenge ({len(cookies)} clearance cookies received).")
+                    
+                    cf_cookies = [c for c in cookies if "cf" in c.get("name", "").lower() or "clearance" in c.get("name", "").lower()]
+                    if cf_cookies:
+                        self.log(f"[FlareSolverr] ✅ SUCCESS: Cloudflare protection detected & solved in {elapsed}s ({len(cf_cookies)} clearance cookies extracted).")
+                    else:
+                        self.log(f"[FlareSolverr] ℹ️ NOT NEEDED: Target page responded cleanly without Cloudflare challenge in {elapsed}s ({len(cookies)} total cookies extracted).")
+                    
                     return cookies, user_agent
+                else:
+                    msg = data.get("message", "Unknown FlareSolverr response error")
+                    self.log(f"[FlareSolverr] ⚠️ UNHELPFUL: Status '{data.get('status')}' after {elapsed}s: {msg} (falling back to native Playwright stealth)")
+            else:
+                self.log(f"[FlareSolverr] ⚠️ HTTP {resp.status_code}: Endpoint error after {elapsed}s (falling back to native Playwright stealth)")
+
+        except requests.exceptions.Timeout:
+            elapsed = round(time.time() - start_t, 2)
+            self.log(f"[FlareSolverr] ⚠️ TIMEOUT: Service request timed out after {elapsed}s (falling back to native Playwright stealth)")
+        except requests.exceptions.ConnectionError:
+            self.log(f"[FlareSolverr] ⚠️ UNREACHABLE: Service at {FLARESOLVERR_URL} is offline or unreachable (falling back to native Playwright stealth)")
         except Exception as e:
-            self.log(f"FlareSolverr request failed (will fall back to native Playwright stealth): {e}")
+            self.log(f"[FlareSolverr] ⚠️ ERROR: Check failed: {e} (falling back to native Playwright stealth)")
+
         return [], None
 
     def cancel(self):
