@@ -681,6 +681,13 @@ class ScraperJob:
                 self.log_structured("INFO", "TURNSTILE", f"[Turnstile] 🎉 Successfully verified ('Success!' text detected) after {round(elapsed, 2)}s.")
                 return True
 
+            is_verifying = any(p in combined for p in [
+                "verifying",
+                "verifying...",
+                "checking if the site connection is secure",
+                "checking your browser"
+            ])
+
             has_challenge = any(p in combined for p in [
                 "verify you are human",
                 "verify you are a human",
@@ -689,15 +696,17 @@ class ScraperJob:
                 "human verification"
             ])
 
-            # 3. Fast-Path Bypass: If grace period elapsed and NO interactive challenge prompt ("verify you are human") exists
-            if elapsed >= grace_period_sec and not has_challenge:
-                self.log_structured("INFO", "TURNSTILE", f"[Turnstile] ⚡ Fast-Path: No active Cloudflare challenge prompt detected after {round(elapsed, 2)}s (challenge_present=False). Proceeding immediately to Auth0 credential entry...", details={"elapsed": round(elapsed, 2), "challenge_present": False})
+            is_turnstile_active = has_cf_iframe or is_verifying or has_challenge
+
+            # 3. Fast-Path Bypass: ONLY proceed if NO Cloudflare iframe, verifying state, or challenge prompt exists after grace period
+            if elapsed >= grace_period_sec and not is_turnstile_active:
+                self.log_structured("INFO", "TURNSTILE", f"[Turnstile] ⚡ Fast-Path: No active Cloudflare iframe or security challenge detected after {round(elapsed, 2)}s. Proceeding immediately to Auth0 credential entry...", details={"elapsed": round(elapsed, 2), "challenge_present": False})
                 return True
 
             # Log periodic status update every 5 seconds
             if time.time() - last_log_t >= 5.0:
                 last_log_t = time.time()
-                self.log_structured("DEBUG", "TURNSTILE", f"[Turnstile] Status ({current_elapsed}s): token_populated={token_populated}, cf_frames={len(cf_frames)}, challenge_present={has_challenge}, url={page.url}")
+                self.log_structured("DEBUG", "TURNSTILE", f"[Turnstile] Status ({current_elapsed}s): token_populated={token_populated}, cf_frames={len(cf_frames)}, challenge_present={has_challenge}, is_verifying={is_verifying}, url={page.url}")
 
             # 4. If challenge frame is present, attempt human mouse click on Turnstile checkbox element if unverified for > 3.0s
             if cf_frames and (time.time() - last_click_t > 3.0):
@@ -882,13 +891,13 @@ class ScraperJob:
             if username_inp.count() > 0 and username_inp.is_visible():
                 curr_val = username_inp.input_value()
                 if not curr_val or curr_val.strip() == "":
-                    # Solve / Fast-path Turnstile before typing email
-                    if not self.solve_and_wait_turnstile(page, max_wait_sec=50, update_progress_cb=update_progress_cb):
-                        raise Exception("Cloudflare Turnstile security verification failed.")
-                    
                     self.log("Filling email address into SSO username input...")
                     if update_progress_cb: update_progress_cb("Filling email address...", 2)
                     page.fill("input[name='username'], input[id='username'], input[type='email']", self.email)
+
+                    # Solve / Fast-path Turnstile before submitting username step
+                    if not self.solve_and_wait_turnstile(page, max_wait_sec=50, update_progress_cb=update_progress_cb):
+                        raise Exception("Cloudflare Turnstile security verification failed.")
                     
                     # If password field is not yet visible, press Enter to submit username step
                     pwd_inp_check = page.locator("input[name='password']:not(.hide), input[id='password']").first
