@@ -640,9 +640,9 @@ class ScraperJob:
 
             has_challenge = "verify you are human" in combined or "verify you are a human" in combined
 
-            # 3. Fast-Path Bypass: If grace period elapsed and NO challenge frame or text exists
-            if elapsed >= grace_period_sec and not has_cf_iframe and not has_challenge:
-                self.log_structured("INFO", "TURNSTILE", f"[Turnstile] ⚡ Fast-Path: No active Cloudflare challenge frame or widget detected after {round(elapsed, 2)}s (challenge_present=False). Proceeding immediately to Auth0 credential entry...", details={"elapsed": round(elapsed, 2), "challenge_present": False})
+            # 3. Fast-Path Bypass: If grace period elapsed and NO interactive challenge prompt ("verify you are human") exists
+            if elapsed >= grace_period_sec and not has_challenge:
+                self.log_structured("INFO", "TURNSTILE", f"[Turnstile] ⚡ Fast-Path: No active Cloudflare challenge prompt detected after {round(elapsed, 2)}s (challenge_present=False). Proceeding immediately to Auth0 credential entry...", details={"elapsed": round(elapsed, 2), "challenge_present": False})
                 return True
 
             # Log periodic status update every 5 seconds
