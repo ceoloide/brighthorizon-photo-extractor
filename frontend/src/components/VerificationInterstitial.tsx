@@ -109,7 +109,7 @@ export const VerificationInterstitial: React.FC<VerificationInterstitialProps> =
   ];
 
   return (
-    <div className="min-h-screen flex flex-col justify-center items-center p-4 sm:p-6 bg-slate-50 font-sans">
+    <div className="flex-1 flex flex-col justify-center items-center p-4 sm:p-6 bg-slate-50 font-sans">
       <div className="max-w-2xl w-full bg-white rounded-2xl p-5 sm:p-8 border border-slate-200 shadow-sm space-y-6">
         {/* Header Banner */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
