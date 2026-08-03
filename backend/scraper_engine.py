@@ -1355,24 +1355,34 @@ class ScraperJob:
                 
                 # Dynamic re-query matching month name and year flexibly across whitespace/linebreaks
                 parts = tf_text.split()
-                target_li = None
+                target_el = None
                 if len(parts) == 2:
                     m_mon, m_yr = parts[0].lower(), parts[1]
-                    for li in page.locator("li").all():
+                    for el in page.locator("li, div.tile.pointable, div.tile").all():
                         try:
-                            t = li.inner_text().lower()
-                            if m_mon in t and m_yr in t and re.search(r'[a-z]{3}\s*\d{4}', t):
-                                target_li = li
+                            t = el.inner_text().lower()
+                            if m_mon in t and m_yr in t:
+                                target_el = el
                                 break
                         except Exception:
                             pass
 
-                if target_li:
-                    tile = target_li.locator("div.tile.pointable").first
-                    if tile.count() > 0:
-                        tile.click()
+                if target_el:
+                    # If target_el is an <li>, prefer clicking inner div.tile.pointable (Rule 2.A)
+                    is_li = False
+                    try:
+                        is_li = target_el.evaluate("el => el.tagName.toLowerCase() === 'li'")
+                    except Exception:
+                        pass
+                    
+                    if is_li:
+                        tile = target_el.locator("div.tile.pointable, div.tile").first
+                        if tile.count() > 0:
+                            tile.click()
+                        else:
+                            target_el.click()
                     else:
-                        target_li.click()
+                        target_el.click()
                 else:
                     self.log(f"Could not locate active DOM element for timeframe month '{tf_text}'; skipping.")
                     continue
