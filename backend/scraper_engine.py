@@ -883,13 +883,13 @@ class ScraperJob:
             if username_inp.count() > 0 and username_inp.is_visible():
                 curr_val = username_inp.input_value()
                 if not curr_val or curr_val.strip() == "":
+                    # Solve / Fast-path Turnstile before typing email
+                    if not self.solve_and_wait_turnstile(page, max_wait_sec=50, update_progress_cb=update_progress_cb):
+                        raise Exception("Cloudflare Turnstile security verification failed.")
+
                     self.log("Filling email address into SSO username input...")
                     if update_progress_cb: update_progress_cb("Filling email address...", 2)
                     page.fill("input[name='username'], input[id='username'], input[type='email']", self.email)
-
-                    # Solve / Fast-path Turnstile before submitting username step
-                    if not self.solve_and_wait_turnstile(page, max_wait_sec=50, update_progress_cb=update_progress_cb):
-                        raise Exception("Cloudflare Turnstile security verification failed.")
                     
                     # If password field is not yet visible, press Enter to submit username step
                     pwd_inp_check = page.locator("input[name='password']:not(.hide), input[id='password']").first
