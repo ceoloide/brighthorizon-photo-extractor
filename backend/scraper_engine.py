@@ -1301,37 +1301,46 @@ class ScraperJob:
             pass
             
         # Dynamic wait up to 45s for Knockout.js timeframe month links to populate
-        timeframe_lis = []
+        month_names = []
         start_wait = time.time()
         while time.time() - start_wait < 45.0:
             try:
                 lis = page.locator("li").all()
-                matching = [li for li in lis if re.search(r'[a-z]{3}\s+\d{4}', li.inner_text().strip(), re.IGNORECASE)]
-                if matching:
-                    timeframe_lis = matching
+                found = []
+                for li in lis:
+                    try:
+                        txt = li.inner_text().strip()
+                        m = re.search(r'\b([a-z]{3}\s+\d{4})\b', txt, re.IGNORECASE)
+                        if m:
+                            m_str = m.group(1).strip()
+                            if m_str.lower() not in [x.lower() for x in found]:
+                                found.append(m_str)
+                    except Exception:
+                        pass
+                if found:
+                    month_names = found
                     break
             except Exception:
                 pass
             time.sleep(1.0)
             
-        if len(timeframe_lis) == 0:
+        if len(month_names) == 0:
             current_url = page.url.lower()
             if "login" in current_url or "sso" in current_url:
                 self.log(f"Session expired or unauthenticated while accessing timeline for {child_name}. Clearing expired session files.")
                 self.tenant_storage.clear_session()
                 raise Exception("Session expired or invalid. Please re-authenticate and import fresh session tokens.")
 
-        self.log(f"Found {len(timeframe_lis)} timeframe month links for {child_name}.")
+        self.log(f"Found {len(month_names)} timeframe month links for {child_name}: {', '.join(month_names)}")
         
         self.status["current_child"] = child_name
         manifest = self.tenant_storage.load_manifest()
         
-        for tf_li in timeframe_lis:
+        for tf_text in month_names:
             if self._cancelled:
                 self.log("Extraction cancelled by user.")
                 return
 
-            tf_text = tf_li.inner_text().strip()
             self.status["current_month"] = tf_text
             
             # Point (3) Optimization: check if timeframe month's end date is strictly prior to start_date
@@ -1341,14 +1350,23 @@ class ScraperJob:
                     self.log(f"Timeframe month '{tf_text}' (end date: {m_end}) is prior to start date {self.start_date}. Halting month scan for {child_name}.")
                     break
 
-            self.log(f"Navigating to timeframe: {tf_text}...")
-            
-            # Click inner div.tile (rule 2.A in AGENTS.md)
-            tile = tf_li.locator("div.tile.pointable").first
-            if tile.count() > 0:
-                tile.click()
-            else:
-                tf_li.click()
+            try:
+                self.log(f"Navigating to timeframe: {tf_text}...")
+                
+                # Dynamic re-query for fresh DOM locator to prevent stale element handle detachment
+                tf_li = page.locator("li").filter(has_text=re.compile(rf"\b{re.escape(tf_text)}\b", re.IGNORECASE)).first
+                if tf_li.count() > 0:
+                    tile = tf_li.locator("div.tile.pointable").first
+                    if tile.count() > 0 and tile.is_visible():
+                        tile.click()
+                    else:
+                        tf_li.click()
+                else:
+                    self.log(f"Could not locate active DOM element for timeframe month '{tf_text}'; skipping.")
+                    continue
+            except Exception as nav_err:
+                self.log(f"Navigation notice for month '{tf_text}': {nav_err}. Continuing to next month...")
+                continue
                 
             # Smart Month Feed Monitor: Wait for 'no events for the month' indicator or rendered feed thumbnails
             is_empty_month = False
