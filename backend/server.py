@@ -527,6 +527,10 @@ if os.path.exists(dist_dir):
             return FileResponse(file_path)
         index_path = os.path.join(dist_dir, "index.html")
         if os.path.exists(index_path):
-            return FileResponse(index_path, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+            return FileResponse(index_path, headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0"
+            })
         return {"message": "Frontend build not found"}
 

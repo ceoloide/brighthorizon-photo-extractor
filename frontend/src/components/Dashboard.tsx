@@ -587,52 +587,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
                   )}
                 </div>
 
-                {showLogs && (
-                  <div className="space-y-3">
-                    {/* Live Headless Browser Screenshot Preview Box (Only when logs are expanded) */}
-                    <div className="bg-slate-950 rounded-xl border border-slate-800 p-2 overflow-hidden flex flex-col items-center justify-center w-full max-w-2xl mx-auto relative group shadow-sm">
-                      <div className="w-full flex items-center justify-between px-2 py-1 border-b border-slate-800 text-[10px] font-mono text-slate-400">
-                        <span className="flex items-center gap-1.5 font-semibold text-slate-200">
-                          <Monitor className="w-3.5 h-3.5 text-indigo-400" />
-                          <span>Live Browser Preview</span>
-                        </span>
-                        {status.state === 'running' && (
-                          <span className="flex items-center gap-1 text-emerald-400 font-bold">
-                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                            LIVE
-                          </span>
-                        )}
+                {showLogs && status.logs && (
+                  <div className="bg-slate-900 rounded-xl p-3 sm:p-3.5 max-h-56 overflow-y-auto font-mono text-[11px] text-slate-200 space-y-1 border border-slate-800">
+                    {status.logs.map((log: string, idx: number) => (
+                      <div key={idx} className="leading-relaxed flex items-start gap-2 break-all">
+                        <span className="text-slate-500 select-none">&gt;</span>
+                        <span>{log}</span>
                       </div>
-
-                      {status.screenshot || status.frame_url ? (
-                        <div className="relative w-full aspect-[16/9] flex items-center justify-center bg-slate-900 rounded-lg mt-1.5 overflow-hidden">
-                          <img
-                            src={status.screenshot || status.frame_url}
-                            alt="Live Browser Preview"
-                            className="w-full h-full object-contain rounded-lg shadow-md"
-                          />
-                        </div>
-                      ) : (
-                        <div className="flex flex-col items-center justify-center py-8 text-slate-500 gap-2">
-                          <RefreshCw className={`w-5 h-5 text-indigo-400 ${status.state === 'running' ? 'animate-spin' : ''}`} />
-                          <span className="text-[11px] font-mono text-slate-400">
-                            {status.state === 'running' ? 'Capturing live browser preview...' : 'No active browser frame'}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Console Text Logs */}
-                    {status.logs && (
-                      <div className="bg-slate-900 rounded-xl p-3 sm:p-3.5 max-h-56 overflow-y-auto font-mono text-[11px] text-slate-200 space-y-1 border border-slate-800">
-                        {status.logs.map((log: string, idx: number) => (
-                          <div key={idx} className="leading-relaxed flex items-start gap-2 break-all">
-                            <span className="text-slate-500 select-none">&gt;</span>
-                            <span>{log}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    ))}
                   </div>
                 )}
               </div>

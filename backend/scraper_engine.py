@@ -266,8 +266,6 @@ class ScraperJob:
         if len(self.status["logs"]) > 300:
             self.status["logs"].pop(0)
             
-        self._update_screenshot()
-            
         if self.log_callback:
             self.log_callback(entry_str)
 
@@ -1264,9 +1262,29 @@ class ScraperJob:
             else:
                 tf_li.click()
                 
-            page.wait_for_timeout(3000)
-            
-            # Scroll to trigger lazy loading
+            # Smart Month Feed Monitor: Wait for 'no events for the month' indicator or rendered feed thumbnails
+            is_empty_month = False
+            start_month_wait = time.time()
+            while time.time() - start_month_wait < 10.0:
+                # 1. Check if Knockout 'no events for the month' div/h1 container is visible
+                empty_loc = page.locator("h1:has-text('no events for the month'), div:has-text('no events for the month')").first
+                if empty_loc.count() > 0 and empty_loc.is_visible():
+                    is_empty_month = True
+                    break
+                    
+                # 2. Check if timeline feed items are present in left panel
+                timeline_check = page.locator("div.well.left-panel.pull-left")
+                items_check = timeline_check.locator("ul.thumbnails li").all() if timeline_check.count() > 0 else page.locator("ul.thumbnails li").all()
+                if len(items_check) > 0:
+                    break
+                    
+                page.wait_for_timeout(200)
+
+            if is_empty_month:
+                self.log(f"Timeframe month '{tf_text}' has no events ('no events for the month' detected). Advancing to next month immediately...")
+                continue
+                
+            # Scroll to trigger lazy loading for months with posts
             self.scroll_and_load(page)
             
             # Scope timeline search inside left panel (rule 2.B in AGENTS.md)
