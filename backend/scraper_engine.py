@@ -1310,9 +1310,9 @@ class ScraperJob:
                 for li in lis:
                     try:
                         txt = li.inner_text().strip()
-                        m = re.search(r'\b([a-z]{3}\s+\d{4})\b', txt, re.IGNORECASE)
+                        m = re.search(r'([a-z]{3})\s*(\d{4})', txt, re.IGNORECASE)
                         if m:
-                            m_str = m.group(1).strip()
+                            m_str = f"{m.group(1)} {m.group(2)}".strip()
                             if m_str.lower() not in [x.lower() for x in found]:
                                 found.append(m_str)
                     except Exception:
@@ -1353,14 +1353,26 @@ class ScraperJob:
             try:
                 self.log(f"Navigating to timeframe: {tf_text}...")
                 
-                # Dynamic re-query for fresh DOM locator to prevent stale element handle detachment
-                tf_li = page.locator("li").filter(has_text=re.compile(rf"\b{re.escape(tf_text)}\b", re.IGNORECASE)).first
-                if tf_li.count() > 0:
-                    tile = tf_li.locator("div.tile.pointable").first
-                    if tile.count() > 0 and tile.is_visible():
+                # Dynamic re-query matching month name and year flexibly across whitespace/linebreaks
+                parts = tf_text.split()
+                target_li = None
+                if len(parts) == 2:
+                    m_mon, m_yr = parts[0].lower(), parts[1]
+                    for li in page.locator("li").all():
+                        try:
+                            t = li.inner_text().lower()
+                            if m_mon in t and m_yr in t and re.search(r'[a-z]{3}\s*\d{4}', t):
+                                target_li = li
+                                break
+                        except Exception:
+                            pass
+
+                if target_li:
+                    tile = target_li.locator("div.tile.pointable").first
+                    if tile.count() > 0:
                         tile.click()
                     else:
-                        tf_li.click()
+                        target_li.click()
                 else:
                     self.log(f"Could not locate active DOM element for timeframe month '{tf_text}'; skipping.")
                     continue
