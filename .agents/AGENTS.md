@@ -98,3 +98,28 @@ for span in actions_spans:
     # first word of h1 = child's given name
     name = card_name.split()[0].capitalize()
 ```
+
+## 6. Semantic Versioning & Incremental Build Directive
+
+### A. Semantic Versioning Scheme
+- All code updates, bug fixes, and releases must adhere strictly to **Semantic Versioning**:
+  `v<MAJOR>.<MINOR>.<PATCH>-b<BUILD_NUMBER>` (e.g. `v2.1.0-b2`).
+- `MAJOR`: Breaking architectural changes.
+- `MINOR`: New features or enhancements (e.g. re-download, Turnstile fast-path).
+- `PATCH`: Bug fixes or security updates.
+- `b<BUILD_NUMBER>`: Auto-incrementing build counter.
+
+### B. Automated Build & Version Incrementing
+- Prior to every container build, release commit, or deployment, the automated version bump script **MUST** be executed:
+  ```bash
+  python3 scripts/bump_version.py
+  ```
+- This script automatically:
+  1. Increments the `build` integer in `version.json` and `frontend/src/version.json`.
+  2. Captures the active git commit short hash (`git rev-parse --short HEAD`).
+  3. Updates `frontend/package.json`.
+
+### C. Persistent Version Footer
+- The `Footer` component (`frontend/src/components/Footer.tsx`) **MUST** remain rendered at the bottom of all application views (Dashboard, Login, Verification) displaying:
+  `Bright Horizons Photo Extractor • Version X.X.X-b<BUILD> (<HASH>)`
+  to guarantee immediate, end-to-end build transparency for users and automated checkers.
