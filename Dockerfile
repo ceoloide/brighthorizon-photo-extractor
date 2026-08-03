@@ -1,8 +1,12 @@
 # Stage 1: Build Frontend React Bundle
 FROM node:20-alpine AS frontend-builder
 WORKDIR /app/frontend
+
+# Cache npm dependencies layer
 COPY frontend/package*.json ./
 RUN npm install
+
+# Copy frontend source and build dist
 COPY frontend/ ./
 RUN npm run build
 
@@ -15,7 +19,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Install system dependencies & Playwright browser libraries
+# 1. System & Playwright dependencies (Cached layer - changes rarely)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
@@ -43,19 +47,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm /tmp/chrome.deb \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python requirements
+# 2. Python package dependencies (Cached layer)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
-    fastapi uvicorn cryptography requests pydantic piexif playwright playwright-stealth \
     && playwright install chromium
 
-# Copy application source & built frontend assets
+# 3. Fast-changing Application Source Code
 COPY backend/ ./backend/
 COPY main.py .
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
 EXPOSE 8095
-
 VOLUME ["/app/data"]
 
 CMD ["uvicorn", "backend.server:app", "--host", "0.0.0.0", "--port", "8095"]

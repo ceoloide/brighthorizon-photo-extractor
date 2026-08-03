@@ -123,3 +123,11 @@ for span in actions_spans:
 - The `Footer` component (`frontend/src/components/Footer.tsx`) **MUST** remain rendered at the bottom of all application views (Dashboard, Login, Verification) displaying:
   `Bright Horizons Photo Extractor • Version X.X.X-b<BUILD> (<HASH>)`
   to guarantee immediate, end-to-end build transparency for users and automated checkers.
+
+### D. Mandatory Live Verification & Version Citation
+- **Post-Deployment Verification Requirement:** Whenever code is deployed or built, the agent **MUST** run:
+  ```bash
+  python3 scripts/verify_deployment.py https://bears.ceoloide.com
+  ```
+  to HTTP `curl` `https://bears.ceoloide.com`, extract the served JS bundle, and verify that the live version matches `version.json`.
+- **Mandatory User Notification Rule:** Whenever informing the user of a deployment, the agent **MUST ALWAYS** explicitly cite the verified live version and commit hash (`v<MAJOR>.<MINOR>.<PATCH>-b<BUILD> (<HASH>)`).
