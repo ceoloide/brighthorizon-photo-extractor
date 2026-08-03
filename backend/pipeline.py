@@ -258,6 +258,14 @@ def run_extraction_pipeline(
             "manifest": manifest,
         }
 
+    def save_manifest_to_disk():
+        os.makedirs(output_dir, exist_ok=True)
+        try:
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2)
+        except Exception as e:
+            log(f"Error saving manifest to {manifest_path}: {e}")
+
     # If no timeframe links were found, attempt reading current visible feed directly
     if not tf_links:
         tf_links = [{"text": "current", "year": datetime.now().year, "locator": None}]
@@ -265,6 +273,7 @@ def run_extraction_pipeline(
     for tf_item in tf_links:
         if cancel_checker and cancel_checker():
             log("Extraction cancelled during timeframe iteration.")
+            save_manifest_to_disk()
             return {
                 "status": "cancelled",
                 "child_name": child_name,
@@ -307,6 +316,7 @@ def run_extraction_pipeline(
         for item in feed_items:
             if cancel_checker and cancel_checker():
                 log("Extraction cancelled during feed item processing.")
+                save_manifest_to_disk()
                 return {
                     "status": "cancelled",
                     "child_name": child_name,

@@ -20,12 +20,11 @@ from backend.dom_parser import extract_obj_id_from_url_or_style, get_month_end_d
 FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://192.168.1.176:8191/v1")
 
 def ensure_xvfb_display(width=1280, height=720):
-    """Ensures Xvfb virtual display is active for headful Chromium execution."""
-    os.system("pkill -f Xvfb 2>/dev/null")
-    time.sleep(0.3)
-    os.system(f"Xvfb :99 -screen 0 {width}x{height}x24 > /dev/null 2>&1 &")
+    """Ensures Xvfb virtual display :99 is active without disrupting active concurrent sessions."""
+    if not os.path.exists("/tmp/.X11-unix/X99"):
+        os.system(f"Xvfb :99 -screen 0 {width}x{height}x24 > /dev/null 2>&1 &")
+        time.sleep(0.5)
     os.environ["DISPLAY"] = ":99"
-    time.sleep(0.5)
 
 def capture_compressed_b64_frame(page: Page, width=1280, height=720) -> Optional[str]:
     """Captures a lightweight JPEG screenshot (quality=45) encoded in Base64 for live preview streaming."""
@@ -650,17 +649,38 @@ class ScraperJob:
                 self.check_auth0_errors(page)
                 self.status["state"] = "running"
                 
-            # Step 6: Verify portal home page load
-            self.log("Waiting for post-login redirection to portal home...")
-            try:
-                page.wait_for_selector("span:has-text('Actions'), h1", timeout=20000)
-            except Exception:
-                pass
-            
-            # Final check for error elements on SSO form
-            self.check_auth0_errors(page)
+            # Step 6: Verify portal home page load with fast-react polling (up to 45s timeout)
+            self.log("Waiting for post-login redirection to portal home (fast-react polling up to 45s)...")
+            start_poll = time.time()
+            max_timeout = 45.0
+            auth_confirmed = False
+
+            while time.time() - start_poll < max_timeout:
+                self.check_auth0_errors(page)
                 
-            self.log(f"Authenticated state verified! Current URL: {page.url}")
+                try:
+                    # Check for child card "Actions" dropdown trigger or home dashboard headings
+                    if page.locator("span:has-text('Actions')").count() > 0:
+                        elapsed = round(time.time() - start_poll, 2)
+                        self.log(f"Portal home authenticated DOM element ('Actions') detected in {elapsed}s!")
+                        auth_confirmed = True
+                        break
+
+                    # Also check for child card full-name heading on familyinfocenter home page
+                    if "familyinfocenter" in page.url.lower() and page.locator("div.card h1, div.child-card h1, h1.child-name, h1:has-text('Taccani')").count() > 0:
+                        elapsed = round(time.time() - start_poll, 2)
+                        self.log(f"Portal home authenticated DOM element ('child card heading') detected in {elapsed}s!")
+                        auth_confirmed = True
+                        break
+                except Exception:
+                    pass
+
+                page.wait_for_timeout(250) # Active poll every 250ms for immediate reaction
+
+            if not auth_confirmed:
+                self.log(f"Polling window ended after {max_timeout}s without explicit DOM marker. Current URL: {page.url}")
+            else:
+                self.log(f"Authenticated state verified! Current URL: {page.url}")
 
     def verify_imported_session(self, update_progress_cb: Optional[Callable[[str, int], None]] = None) -> List[Dict[str, str]]:
         """
