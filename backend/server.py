@@ -159,7 +159,8 @@ async def verify_stream(email: str = Query(...), password: str = Query(...)):
     tenant_id = tenant_storage.tenant_id
     
     current_state = _active_verifications.get(tenant_id)
-    if not current_state or current_state.get("status") in ["failed", "completed_reset"]:
+    if not current_state or current_state.get("status") in ["success", "failed", "completed_reset"]:
+        _active_verifications.pop(tenant_id, None)
         current_state = _start_verification_thread(email_clean, password, tenant_storage)
 
     async def event_generator():
@@ -199,7 +200,8 @@ def verify_progress(req: LoginRequest):
     tenant_id = tenant_storage.tenant_id
     
     current_state = _active_verifications.get(tenant_id)
-    if not current_state or current_state.get("status") in ["failed", "completed_reset"]:
+    if not current_state or current_state.get("status") in ["success", "failed", "completed_reset"]:
+        _active_verifications.pop(tenant_id, None)
         current_state = _start_verification_thread(email, req.password, tenant_storage)
         return JSONResponse(content=current_state)
         
@@ -262,6 +264,9 @@ def logout(response: Response, request: Request, authorization: Optional[str] = 
                         print(f"[Logout] Cancelled running scraper job for tenant {tenant_id}")
                 except Exception as e:
                     print(f"[Logout Error] Failed to cancel scraper job for tenant {tenant_id}: {e}")
+
+            # Pop any verification session state from memory
+            _active_verifications.pop(tenant_id, None)
                     
             # Clear server-side session cookies, storage_state.json, and browser profile
             tenant.clear_session()
@@ -312,6 +317,9 @@ def delete_account(tenant: TenantStorage = Depends(get_current_tenant)):
         if job:
             job.status["state"] = "failed"
             job.status["error"] = "Account deleted"
+
+    # Pop any verification session state from memory
+    _active_verifications.pop(tenant_id, None)
             
     # Purge all media, user_data, encrypted manifests, and archives from disk
     tenant.purge_all_data()
