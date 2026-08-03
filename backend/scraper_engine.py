@@ -834,6 +834,8 @@ class ScraperJob:
         update_progress("Bypassing Cloudflare turnstile protection via FlareSolverr...", 1, None, force_shot=False)
         
         user_data_dir = self.tenant_storage.user_data_dir
+        # Purge existing browser profile session before pre-verification to force a fresh login
+        self.tenant_storage.clear_session()
         clean_user_data_locks(user_data_dir)
         clearance_cookies, solver_ua = self.solve_cloudflare_flaresolverr("https://familyinfocenter.brighthorizons.com/home")
         
@@ -885,6 +887,14 @@ class ScraperJob:
                 if not children:
                     update_progress("Verification failed: No child profiles found.", 3, page=page, force_shot=True)
                     raise Exception("Authentication succeeded, but no active child profiles were discovered for this account.")
+
+                # Save authenticated storage state to disk
+                state_file = os.path.join(user_data_dir, "storage_state.json")
+                try:
+                    context.storage_state(path=state_file)
+                    self.log(f"Successfully persisted authenticated storage state to {state_file}")
+                except Exception as e:
+                    self.log(f"Storage state save notice: {e}")
 
                 # Calculate cookie expiration timestamp (or default to 15m / 900s)
                 all_cookies = context.cookies()
