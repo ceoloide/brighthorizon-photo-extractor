@@ -210,6 +210,7 @@ class ScraperJob:
             "current_step": "Initializing",
             "files_downloaded": 0,
             "error": None,
+            "screenshot": None,
             "logs": []
         }
         self._mfa_code: Optional[str] = None
@@ -244,6 +245,18 @@ class ScraperJob:
             if random.random() < 0.15:
                 page.wait_for_timeout(random.randint(100, 220))
 
+    def _update_screenshot(self, page: Optional[Page] = None):
+        """Captures a lightweight base64 JPEG screenshot of the active Playwright browser page."""
+        p = page or self._active_page
+        if not p:
+            return
+        try:
+            screenshot_bytes = p.screenshot(type="jpeg", quality=40, scale="css")
+            b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+            self.status["screenshot"] = f"data:image/jpeg;base64,{b64}"
+        except Exception:
+            pass
+
     def log_structured(self, level: str, category: str, message: str, details: Optional[Dict[str, Any]] = None):
         """Structured logging method storing log messages and calling log_callback."""
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -252,6 +265,8 @@ class ScraperJob:
         self.status["logs"].append(entry_str)
         if len(self.status["logs"]) > 300:
             self.status["logs"].pop(0)
+            
+        self._update_screenshot()
             
         if self.log_callback:
             self.log_callback(entry_str)
