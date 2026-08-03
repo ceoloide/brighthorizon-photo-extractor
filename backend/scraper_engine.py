@@ -563,9 +563,26 @@ class ScraperJob:
                     page.context.clear_cookies()
                 except Exception:
                     pass
+
+                # Deep clear browser cookies and origin storage via Chrome DevTools Protocol (CDP)
+                try:
+                    cdp = page.context.new_cdp_session(page)
+                    cdp.send("Network.clearBrowserCookies")
+                    cdp.send("Storage.clearDataForOrigin", {"origin": "https://bhloginsso.brighthorizons.com", "storageTypes": "all"})
+                    cdp.send("Storage.clearDataForOrigin", {"origin": "https://familyinfocenter.brighthorizons.com", "storageTypes": "all"})
+                    cdp.send("Storage.clearDataForOrigin", {"origin": "https://mybrightday.brighthorizons.com", "storageTypes": "all"})
+                except Exception as e:
+                    self.log(f"CDP session clear notice: {e}")
+
                 page.goto("https://familyinfocenter.brighthorizons.com/okta/login", wait_until="domcontentloaded")
                 state = self.detect_page_state(page, max_wait_sec=15)
                 self.log(f"Post-logout refreshed page state: '{state}' (URL: {page.url})")
+
+                # If state is still 'authenticated', navigate directly to login form
+                if state == "authenticated":
+                    self.log("Page remained on authenticated home; navigating explicitly to login trigger...")
+                    page.goto("https://familyinfocenter.brighthorizons.com/okta/login", wait_until="domcontentloaded")
+                    state = self.detect_page_state(page, max_wait_sec=15)
 
         # Step 1: Wait for and click Landing Page "Log In" button
         if state == "landing_login_btn":
