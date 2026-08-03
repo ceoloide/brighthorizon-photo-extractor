@@ -21,10 +21,12 @@ FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://192.168.1.176:8191
 
 def ensure_xvfb_display(width=1280, height=720):
     """Ensures Xvfb virtual display :99 is active without disrupting active concurrent sessions."""
-    if not os.path.exists("/tmp/.X11-unix/X99"):
+    os.environ["DISPLAY"] = ":99"
+    res = os.system("xdpyinfo -display :99 >/dev/null 2>&1")
+    if res != 0:
+        os.system("rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null")
         os.system(f"Xvfb :99 -screen 0 {width}x{height}x24 > /dev/null 2>&1 &")
         time.sleep(0.5)
-    os.environ["DISPLAY"] = ":99"
 
 def capture_compressed_b64_frame(page: Page, width=1280, height=720) -> Optional[str]:
     """Captures a lightweight JPEG screenshot (quality=45) encoded in Base64 for live preview streaming."""
@@ -408,19 +410,30 @@ class ScraperJob:
             
             # 1. Primary Check: Check if Cloudflare populated the hidden response token input
             token_populated = False
+            has_turnstile_input = False
             try:
-                token_populated = page.evaluate("""() => {
+                token_info = page.evaluate("""() => {
                     const inputs = document.querySelectorAll("input[name='cf-turnstile-response'], input[name='g-recaptcha-response']");
+                    let populated = false;
                     for (const input of inputs) {
-                        if (input.value && input.value.trim().length > 10) return true;
+                        if (input.value && input.value.trim().length > 10) populated = true;
                     }
-                    return false;
+                    return { count: inputs.length, populated: populated };
                 }""")
+                has_turnstile_input = token_info.get("count", 0) > 0
+                token_populated = token_info.get("populated", False)
             except Exception:
                 pass
 
             if token_populated:
                 self.log(f"[Turnstile] 🎉 Successfully verified! Response token populated after {current_elapsed}s.")
+                return True
+
+            has_cf_iframe = any("challenges.cloudflare.com" in f.url for f in page.frames)
+
+            # If no Turnstile input element and no challenge frame exists on page, Turnstile is not active on this form
+            if not has_turnstile_input and not has_cf_iframe:
+                self.log(f"[Turnstile] No Turnstile widget or frame detected on page after {current_elapsed}s. Proceeding directly...")
                 return True
 
             # 2. Secondary Check: Gather text content from body and all frames safely
@@ -959,21 +972,26 @@ class ScraperJob:
                     
                     # Target specific dropdown item
                     mbd = page.locator("span.actions-menu-item-label", has_text="My Bright Day").first
-                    mbd.wait_for(state="visible", timeout=4000)
-                    
-                    with context.expect_page() as new_page_info:
-                        mbd.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
+                    try:
+                        mbd.wait_for(state="visible", timeout=3000)
+                        with context.expect_page() as new_page_info:
+                            mbd.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
+                            
+                        new_page = new_page_info.value
+                        new_page.wait_for_load_state("domcontentloaded", timeout=12000)
                         
-                    new_page = new_page_info.value
-                    new_page.wait_for_load_state("domcontentloaded", timeout=12000)
-                    
-                    m = re.search(r'dependent_id=([^&]+)', new_page.url)
-                    if m:
-                        dep_id = m.group(1)
-                        children.append({"name": given_name, "dependent_id": dep_id})
-                        self.log(f"Discovered child: {given_name} (dependent_id: {dep_id[:8]}...)")
-                        
-                    new_page.close()
+                        m = re.search(r'dependent_id=([^&]+)', new_page.url)
+                        if m:
+                            dep_id = m.group(1)
+                            children.append({"name": given_name, "dependent_id": dep_id})
+                            self.log(f"Discovered child: {given_name} (dependent_id: {dep_id[:8]}...)")
+                            
+                        new_page.close()
+                    finally:
+                        # Close CDK overlay menu if open before processing next card
+                        try: page.keyboard.press("Escape")
+                        except Exception: pass
+                        page.wait_for_timeout(500)
                 except Exception as e:
                     self.log(f"Skipped child card #{idx + 1} (may not have active enrollment): {e}")
                     
