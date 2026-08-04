@@ -93,11 +93,38 @@ _active_verifications: Dict[str, Dict[str, Any]] = {}
 
 def _start_verification_thread(email: str, password: str, tenant_storage: TenantStorage) -> Dict[str, Any]:
     tenant_id = tenant_storage.tenant_id
-    if tenant_id in _active_jobs and _active_jobs[tenant_id].status.get("state") == "running":
-        raise HTTPException(
-            status_code=409,
-            detail="An extraction job is currently running for this account. Re-authentication is blocked to protect the active extraction job."
-        )
+    config = tenant_storage.load_config()
+    stored_password = config.get("password")
+    is_job_running = tenant_id in _active_jobs and _active_jobs[tenant_id].status.get("state") == "running"
+
+    # Fast-path: If password matches stored valid password for this account, bypass Playwright verification
+    if stored_password and password == stored_password:
+        token = create_jwt_token(email, tenant_id)
+        session_expires_at = config.get("session_expires_at") or int((time.time() + 900) * 1000)
+        children = config.get("children", [])
+        state = {
+            "status": "success",
+            "token": token,
+            "email": email,
+            "children": children,
+            "session_expires_at": session_expires_at,
+            "step": "Authenticated using saved credentials",
+            "step_index": 3,
+            "timestamp": time.time()
+        }
+        _active_verifications[tenant_id] = state
+        return state
+
+    # Password does not match stored password: If an extraction job is currently running, block re-auth
+    if is_job_running:
+        state = {
+            "status": "failed",
+            "error": "An extraction job is currently running for this account. The password provided does not match the stored account password. Re-authentication with a different password is blocked until the active job completes or is cancelled.",
+            "timestamp": time.time()
+        }
+        _active_verifications[tenant_id] = state
+        return state
+
     state = {
         "status": "running",
         "step": "Starting headless browser & Cloudflare challenge check...",
