@@ -38,12 +38,22 @@ export const App: React.FC = () => {
   }, []);
 
   const handleSessionSuccess = (userEmail: string, discoveredChildren?: any[], validToken?: string) => {
-    const activeToken = validToken || 'device_session_' + Date.now();
+    const activeEmail = userEmail || localStorage.getItem('bh_email') || '';
+    const activeToken = validToken || localStorage.getItem('bh_token') || 'device_session_' + Date.now();
+
+    if (!activeEmail || !activeToken) {
+      console.error('Missing activeEmail or activeToken in handleSessionSuccess!');
+      return;
+    }
+
     localStorage.setItem('bh_token', activeToken);
-    localStorage.setItem('bh_email', userEmail);
+    localStorage.setItem('bh_email', activeEmail);
+    document.cookie = `bh_tenant_token=${activeToken}; path=/; max-age=${86400 * 30}; SameSite=Lax`;
     setToken(activeToken);
-    setEmail(userEmail);
-    if (discoveredChildren) setChildrenList(discoveredChildren);
+    setEmail(activeEmail);
+    if (discoveredChildren && discoveredChildren.length > 0) {
+      setChildrenList(discoveredChildren);
+    }
   };
 
   const handleLogout = async () => {
@@ -56,6 +66,7 @@ export const App: React.FC = () => {
     } catch {}
     localStorage.removeItem('bh_token');
     localStorage.removeItem('bh_email');
+    document.cookie = 'bh_tenant_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
     setToken(null);
     setEmail(null);
     setChildrenList([]);
@@ -76,7 +87,7 @@ export const App: React.FC = () => {
         {token && email ? (
           <Dashboard token={token} email={email} childrenList={childrenList} onLogout={handleLogout} />
         ) : (
-          <LoginForm onLoginSuccess={(validToken, data) => handleSessionSuccess(data?.email || '', data?.children, validToken)} />
+          <LoginForm onLoginSuccess={(validToken, data) => handleSessionSuccess(data?.email || email || localStorage.getItem('bh_email') || '', data?.children, validToken)} />
         )}
       </main>
       <Footer />

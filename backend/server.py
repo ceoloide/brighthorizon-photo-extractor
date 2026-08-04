@@ -223,7 +223,7 @@ async def verify_stream(email: str = Query(...), password: str = Query(...)):
     )
 
 @app.post("/api/auth/verify-progress")
-def verify_progress(req: LoginRequest):
+def verify_progress(req: LoginRequest, response: Response):
     email = req.email.strip().lower()
     if not email or not req.password:
         raise HTTPException(status_code=400, detail="Email and password are required")
@@ -235,9 +235,12 @@ def verify_progress(req: LoginRequest):
     if not current_state or current_state.get("status") in ["success", "failed", "completed_reset"]:
         _active_verifications.pop(tenant_id, None)
         current_state = _start_verification_thread(email, req.password, tenant_storage)
-        return JSONResponse(content=current_state)
         
-    return JSONResponse(content=current_state)
+    clean_state = {k: v for k, v in current_state.items() if k != "job"}
+    res = JSONResponse(content=clean_state)
+    if current_state.get("status") == "success" and current_state.get("token"):
+        res.set_cookie("bh_tenant_token", current_state["token"], max_age=86400 * 30, httponly=False, samesite="lax")
+    return res
 
 _mfa_attempts: Dict[str, int] = {}
 
