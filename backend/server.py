@@ -287,24 +287,24 @@ def logout(response: Response, request: Request, authorization: Optional[str] = 
             tenant = TenantStorage(email)
             tenant_id = tenant.tenant_id
             
-            # Stop any running extraction job or live Playwright browser/screen session
-            if tenant_id in _active_jobs:
-                try:
-                    job = _active_jobs.pop(tenant_id, None)
-                    if job:
-                        job.cancel()
-                        print(f"[Logout] Cancelled running scraper job for tenant {tenant_id}")
-                except Exception as e:
-                    print(f"[Logout Error] Failed to cancel scraper job for tenant {tenant_id}: {e}")
-
+@app.post("/api/auth/logout")
+def logout(request: Request, response: Response):
+    cookie_token = request.cookies.get("bh_tenant_token")
+    auth_header = request.headers.get("Authorization")
+    if not cookie_token and auth_header and auth_header.startswith("Bearer "):
+        cookie_token = auth_header.split(" ")[1]
+        
+    if cookie_token:
+        payload = verify_jwt_token(cookie_token)
+        if payload and payload.get("email"):
+            tenant_storage = TenantStorage(payload["email"])
+            tenant_id = tenant_storage.tenant_id
+            
             # Pop any verification session state from memory
             _active_verifications.pop(tenant_id, None)
-                    
-            # Clear server-side session cookies, storage_state.json, and browser profile
-            tenant.clear_session()
             
     response.delete_cookie("bh_tenant_token")
-    return {"status": "success", "message": "Signed out successfully, stopped browser sessions, cancelled running jobs, and cleared server cookies."}
+    return {"status": "success", "message": "Signed out successfully."}
 
 @app.get("/api/auth/me")
 def get_me(request: Request, authorization: Optional[str] = Header(None)):
@@ -320,13 +320,18 @@ def get_me(request: Request, authorization: Optional[str] = Header(None)):
         return {"authenticated": False}
         
     tenant = TenantStorage(payload["email"])
+    config = tenant.load_config()
+    
+    has_config = bool(config.get("password"))
+    has_active_job = tenant.tenant_id in _active_jobs
     state_file = os.path.join(tenant.user_data_dir, "storage_state.json")
-    if not os.path.exists(state_file):
+    has_state = os.path.exists(state_file)
+
+    if not (has_config or has_active_job or has_state):
         res = JSONResponse(content={"authenticated": False})
         res.delete_cookie("bh_tenant_token")
         return res
 
-    config = tenant.load_config()
     session_expires_at = config.get("session_expires_at") or int((time.time() + 900) * 1000)
     
     return {
