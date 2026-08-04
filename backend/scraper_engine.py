@@ -14,6 +14,8 @@ from typing import Dict, Any, List, Callable, Optional, Tuple
 import html
 from zoneinfo import ZoneInfo
 from playwright.sync_api import sync_playwright, BrowserContext, Page
+import hashlib
+from urllib.parse import urlparse, parse_qs
 from backend.database import TenantStorage
 from backend.dom_parser import extract_obj_id_from_url_or_style, get_month_end_date
 
@@ -1353,92 +1355,84 @@ class ScraperJob:
             try:
                 self.log(f"Navigating to timeframe: {tf_text}...")
                 
-                # Dynamic re-query matching month name and year flexibly across whitespace/linebreaks
-                parts = tf_text.split()
-                target_el = None
-                if len(parts) == 2:
-                    m_mon, m_yr = parts[0].lower(), parts[1]
-                    for el in page.locator("li, div.tile.pointable, div.tile").all():
-                        try:
-                            t = el.inner_text().lower()
-                            if m_mon in t and m_yr in t:
-                                target_el = el
-                                break
-                        except Exception:
-                            pass
+                # Click timeframe button dynamically targeting inner div.tile (ported from main.py skill code)
+                clicked = page.evaluate("""
+                    (text) => {
+                        const targetText = text.replace(/\\s+/g, ' ').trim().toLowerCase();
+                        const el = Array.from(document.querySelectorAll('li')).find(item => {
+                            const cleanItemText = (item.innerText || item.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                            return cleanItemText === targetText;
+                        });
+                        if (el) {
+                            const clickable = el.querySelector('div.tile') || el.querySelector('div') || el;
+                            clickable.click();
+                            return true;
+                        }
+                        return false;
+                    }
+                """, tf_text)
 
-                if target_el:
-                    # If target_el is an <li>, prefer clicking inner div.tile.pointable (Rule 2.A)
-                    is_li = False
-                    try:
-                        is_li = target_el.evaluate("el => el.tagName.toLowerCase() === 'li'")
-                    except Exception:
-                        pass
-                    
-                    if is_li:
-                        tile = target_el.locator("div.tile.pointable, div.tile").first
-                        if tile.count() > 0:
-                            tile.click()
-                        else:
-                            target_el.click()
-                    else:
-                        target_el.click()
-                else:
-                    self.log(f"Could not locate active DOM element for timeframe month '{tf_text}'; skipping.")
-                    continue
+                if not clicked:
+                    parts = tf_text.split()
+                    if len(parts) == 2:
+                        m_mon, m_yr = parts[0].lower(), parts[1]
+                        for el in page.locator("li, div.tile.pointable, div.tile").all():
+                            try:
+                                t = el.inner_text().lower()
+                                if m_mon in t and m_yr in t:
+                                    el.click()
+                                    clicked = True
+                                    break
+                            except Exception:
+                                pass
+
+                page.wait_for_timeout(3000)  # Wait for Knockout.js feed reload
             except Exception as nav_err:
                 self.log(f"Navigation notice for month '{tf_text}': {nav_err}. Continuing to next month...")
                 continue
                 
-            # Smart Month Feed Monitor: Wait for 'no events for the month' indicator or rendered feed thumbnails
-            is_empty_month = False
-            start_month_wait = time.time()
-            while time.time() - start_month_wait < 10.0:
-                # 1. Check if Knockout 'no events for the month' div/h1 container is visible
-                empty_loc = page.locator("h1:has-text('no events for the month'), div:has-text('no events for the month')").first
-                if empty_loc.count() > 0 and empty_loc.is_visible():
-                    is_empty_month = True
-                    break
-                    
-                # 2. Check if timeline feed items are present in left panel
-                timeline_check = page.locator("div.well.left-panel.pull-left")
-                items_check = timeline_check.locator("ul.thumbnails li").all() if timeline_check.count() > 0 else page.locator("ul.thumbnails li").all()
-                if len(items_check) > 0:
-                    break
-                    
-                page.wait_for_timeout(200)
-
-            if is_empty_month:
+            # Smart Month Feed Monitor: Check if empty month indicator is visible
+            empty_loc = page.locator("div:has(> h1:has-text('no events for the month'))").first
+            if empty_loc.count() > 0 and empty_loc.is_visible():
                 self.log(f"Timeframe month '{tf_text}' has no events ('no events for the month' detected). Advancing to next month immediately...")
                 continue
                 
-            # Scroll to trigger lazy loading for months with posts
+            # Scroll to trigger lazy loading for all posts in this timeframe (ported from main.py skill code)
+            self.log(f"Scrolling page to load historical posts for {tf_text}...")
             self.scroll_and_load(page)
             
-            # Scope timeline search inside left panel (rule 2.B in AGENTS.md)
-            timeline = page.locator("div.well.left-panel.pull-left")
-            feed_items = timeline.locator("ul.thumbnails li").all() if timeline.count() > 0 else page.locator("ul.thumbnails li").all()
+            # Scrape photo and video targets via atomic in-browser JS evaluation (ported from main.py skill code)
+            photo_items = scrape_photos_and_text(page)
+            self.log(f"Extracted {len(photo_items)} posts from timeframe {tf_text}.")
             
-            self.log(f"Extracted {len(feed_items)} posts from timeframe {tf_text}.")
-            
-            for item in feed_items:
+            for item in photo_items:
                 if self._cancelled:
                     self.log("Extraction cancelled by user.")
                     return
 
                 try:
-                    fancybox = item.locator("a.fancybox").first
-                    if fancybox.count() == 0:
+                    src = item.get("src", "")
+                    date_text = item.get("dateText", "")
+                    comment_text = item.get("commentText", "")
+
+                    if not src:
                         continue
-                        
-                    raw_href = fancybox.get_attribute("href") or ""
-                    pointable_tile = item.locator("div.tile.pointable, div.tile").first
-                    style_attr = pointable_tile.get_attribute("style") or "" if pointable_tile.count() > 0 else ""
-                    
-                    obj_id, is_video, resolved_url = extract_obj_id_from_url_or_style(raw_href, style_attr)
-                    if not obj_id:
-                        continue
-                    
+
+                    # Extract obj_id from query params or style URL
+                    parsed_url = urlparse(src)
+                    query_params = parse_qs(parsed_url.query)
+                    obj_ids = query_params.get("obj")
+                    if not obj_ids:
+                        m_obj = re.search(r'obj=([^&]+)', src)
+                        if m_obj:
+                            obj_id = m_obj.group(1)
+                        else:
+                            obj_id = hashlib.md5(src.encode("utf-8")).hexdigest()
+                    else:
+                        obj_id = obj_ids[0]
+
+                    is_video = bool(re.search(r'\.(mp4|mov|webm)\b', src, re.I)) or "video" in src.lower()
+
                     # Check manifest for existing item
                     existing_entry = False
                     existing_manifest_entry = None
@@ -1458,9 +1452,12 @@ class ScraperJob:
                             continue
 
                     # Parse date overlay
-                    overlay_span = item.locator("span.name span").first
-                    date_text = overlay_span.inner_text().strip() if overlay_span.count() > 0 else ""
                     date_str = parse_date(date_text, tf_text)
+                    if not date_str and comment_text:
+                        date_str = parse_date(comment_text, tf_text)
+                    if not date_str:
+                        date_str = datetime.now().strftime("%Y-%m-%d")
+
                     self.status["current_date"] = date_str
 
                     # Check Custom Start Date condition
@@ -1470,12 +1467,11 @@ class ScraperJob:
                         
                     self.log(f"[Downloading] Intercepted new media item (obj_id: {obj_id[:8]}..., type: {'video' if is_video else 'photo'}, date: {date_str}). Fetching binary...")
                         
-                    # Extract full res URL while preserving exact query string parameters (&key=...)
-                    resolved_clean = html.unescape(resolved_url).strip()
-                    if resolved_clean.startswith("http"):
-                        download_url = resolved_clean
-                    elif resolved_clean.startswith("/"):
-                        download_url = f"https://mybrightday.brighthorizons.com{resolved_clean}"
+                    # Extract full res URL
+                    if src.startswith("http"):
+                        download_url = src
+                    elif src.startswith("/"):
+                        download_url = f"https://mybrightday.brighthorizons.com{src}"
                     else:
                         download_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={obj_id}&key={obj_id}"
                     
@@ -1491,14 +1487,12 @@ class ScraperJob:
                             response = page.request.get(download_url, headers=req_headers, timeout=120000)
                             if response.status == 200:
                                 body_data = response.body()
-                                # Unpack Bright Horizons signed_url JSON if returned
                                 try:
                                     json_data = json.loads(body_data.decode("utf-8"))
                                     if isinstance(json_data, dict) and "signed_url" in json_data:
                                         signed_url = json_data["signed_url"]
                                         if "mime_type" in json_data and json_data["mime_type"]:
                                             mime_type = json_data["mime_type"]
-                                        # Fetch signed CDN URL with standard User-Agent header
                                         media_resp = page.request.get(signed_url, headers={"User-Agent": req_headers["User-Agent"]}, timeout=120000)
                                         if media_resp.status == 200:
                                             file_bytes = media_resp.body()
@@ -1526,7 +1520,6 @@ class ScraperJob:
                         
                     ext = detect_extension(file_bytes, mime_type)
                     
-                    # Point (1): Calculate clean sequence-based filename without requiring obj_id
                     current_manifest = self.tenant_storage.load_manifest()
                     existing_for_day = [
                         m for m in current_manifest.values()
@@ -1538,7 +1531,7 @@ class ScraperJob:
                     else:
                         orig_filename = f"{child_name} {date_str} ({seq}).{ext}"
 
-                    comment_text = f"Bright Horizons photo for {child_name} on {date_str}"
+                    meta_comment = comment_text if comment_text else f"Bright Horizons photo for {child_name} on {date_str}"
                     
                     # Save to tenant storage
                     saved_entry = self.tenant_storage.add_media_entry(
@@ -1546,7 +1539,7 @@ class ScraperJob:
                         child=child_name,
                         date_str=date_str,
                         original_filename=orig_filename,
-                        comment=comment_text,
+                        comment=meta_comment,
                         file_bytes=file_bytes,
                         mime_type=mime_type
                     )
@@ -1562,29 +1555,82 @@ class ScraperJob:
                     self.log(f"Failed parsing item: {item_err}")
 
     def scroll_and_load(self, page: Page):
-        """Scrolls feed down iteratively until no new feed posts are loaded."""
-        timeline = page.locator("div.well.left-panel.pull-left")
-        prev_count = 0
-        stable_iterations = 0
+        """Scrolls down the page until no new content is loaded to ensure all photos are rendered (ported from working main.py skill code)."""
+        last_height = page.evaluate("document.body.scrollHeight")
+        no_change_count = 0
+        max_scrolls = 50
+        scrolls = 0
         
-        for iteration in range(40):
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-            page.wait_for_timeout(1500)
-            page.evaluate("window.scrollBy(0, -600);")
-            page.wait_for_timeout(400)
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-            page.wait_for_timeout(1500)
+        while scrolls < max_scrolls:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            page.wait_for_timeout(2500)  # Wait for new items to lazy-load
             
-            feed_items = timeline.locator("ul.thumbnails li").all() if timeline.count() > 0 else page.locator("ul.thumbnails li").all()
-            curr_count = len(feed_items)
-            if curr_count == prev_count and curr_count > 0:
-                stable_iterations += 1
-                if stable_iterations >= 3:
-                    self.log(f"Feed scrolling stabilized at {curr_count} posts after {iteration + 1} iterations.")
-                    break
+            new_height = page.evaluate("document.body.scrollHeight")
+            scrolls += 1
+            if new_height == last_height:
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight - 600)")
+                page.wait_for_timeout(500)
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(2000)
+                
+                new_height = page.evaluate("document.body.scrollHeight")
+                if new_height == last_height:
+                    no_change_count += 1
+                    if no_change_count >= 2:
+                        break
+                else:
+                    no_change_count = 0
             else:
-                stable_iterations = 0
-                prev_count = curr_count
+                no_change_count = 0
+                
+            last_height = new_height
+
+def scrape_photos_and_text(page: Any) -> List[Dict[str, str]]:
+    """
+    Finds all photo/video attachment URLs on the page via in-browser JS evaluation (from working main.py skill code),
+    along with date overlay text and card comments.
+    """
+    js_code = """
+    () => {
+        const items = [];
+        const timeline = document.querySelector('div.well.left-panel.pull-left') || document;
+        timeline.querySelectorAll('ul.thumbnails li').forEach(li => {
+            const a = li.querySelector('a.fancybox');
+            let src = '';
+            if (a) {
+                src = a.getAttribute('href') || '';
+            }
+            if (!src || (!src.includes('obj_attachment') && !src.startsWith('http'))) {
+                const tile = li.querySelector('div.tile.pointable, div.tile');
+                if (tile) {
+                    const style = tile.getAttribute('style') || '';
+                    const match = style.match(/url\\(['"]?([^'"]+)['"]?\\)/);
+                    if (match) src = match[1];
+                }
+            }
+            
+            if (src && (src.includes('obj_attachment') || src.includes('/remote/v1/') || src.startsWith('http'))) {
+                const dateEl = li.querySelector('.header span.name span') || 
+                               li.querySelector('span.name span') || 
+                               li.querySelector('.header span.name') || 
+                               li.querySelector('span.name');
+                const dateText = dateEl ? (dateEl.innerText || dateEl.textContent || '').trim() : '';
+                
+                const footer = li.querySelector('.footer.note');
+                const commentText = footer ? (footer.innerText || footer.textContent || '').trim() : '';
+                
+                items.push({
+                    src: src,
+                    dateText: dateText,
+                    commentText: commentText
+                });
+            }
+        });
+        
+        return items;
+    }
+    """
+    return page.evaluate(js_code)
 
 def parse_date(date_text: str, timeframe_text: str) -> str:
     """Parses date string into YYYY-MM-DD format using timeframe_text year context."""

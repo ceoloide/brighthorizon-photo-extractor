@@ -228,6 +228,7 @@ def run_extraction_pipeline(
     # 3. Discover Timeframe Links
     tf_links = dom_parser.parse_timeframe_links(page)
     log(f"Discovered {len(tf_links)} timeframe items for {child_name}")
+    page.wait_for_timeout(15000)  # 15s delay after finding timeframe month links
 
     # Initialize manifest state
     manifest_path = os.path.join(output_dir, "manifest.json")
