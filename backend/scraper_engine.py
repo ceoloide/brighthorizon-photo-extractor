@@ -1418,18 +1418,29 @@ class ScraperJob:
                     if not src:
                         continue
 
-                    # Extract obj_id from query params or style URL
-                    parsed_url = urlparse(src)
-                    query_params = parse_qs(parsed_url.query)
-                    obj_ids = query_params.get("obj")
-                    if not obj_ids:
-                        m_obj = re.search(r'obj=([^&]+)', src)
-                        if m_obj:
-                            obj_id = m_obj.group(1)
+                    # Extract obj_id and key_id from item parameters or src
+                    obj_id = item.get("objIdParam")
+                    key_id = item.get("keyId")
+
+                    if not obj_id:
+                        parsed_url = urlparse(src)
+                        query_params = parse_qs(parsed_url.query)
+                        obj_ids = query_params.get("obj")
+                        if obj_ids:
+                            obj_id = obj_ids[0]
                         else:
-                            obj_id = hashlib.md5(src.encode("utf-8")).hexdigest()
-                    else:
-                        obj_id = obj_ids[0]
+                            m_obj = re.search(r'obj=([^&]+)', src)
+                            obj_id = m_obj.group(1) if m_obj else hashlib.md5(src.encode("utf-8")).hexdigest()
+
+                    if not key_id:
+                        parsed_url = urlparse(src)
+                        query_params = parse_qs(parsed_url.query)
+                        key_ids = query_params.get("key")
+                        if key_ids:
+                            key_id = key_ids[0]
+                        else:
+                            m_key = re.search(r'key=([^&]+)', src)
+                            key_id = m_key.group(1) if m_key else obj_id
 
                     is_video = item.get("isVideo", False) or bool(re.search(r'\.(mp4|mov|webm)\b', src, re.I)) or "video" in src.lower() or item.get("rawHref", "").startswith("#")
 
@@ -1465,15 +1476,16 @@ class ScraperJob:
                         self.log(f"Post date {date_str} is before custom start date {self.start_date}. Skipping.")
                         continue
                         
-                    self.log(f"[Downloading] Intercepted new media item (obj_id: {obj_id[:8]}..., type: {'video' if is_video else 'photo'}, date: {date_str}). Fetching binary...")
+                    self.log(f"[Downloading] Intercepted new media item (obj_id: {obj_id[:8]}..., key_id: {key_id[:8]}..., type: {'video' if is_video else 'photo'}, date: {date_str}). Fetching binary...")
                         
                     # Extract full res URL
                     if src.startswith("http"):
                         download_url = src
-                    elif src.startswith("/"):
-                        download_url = f"https://mybrightday.brighthorizons.com{src}"
+                    elif src.startswith("/remote/v1/obj_attachment"):
+                        clean_path = re.sub(r'thumbnail=true&?', '', src).rstrip('&?')
+                        download_url = f"https://mybrightday.brighthorizons.com{clean_path}"
                     else:
-                        download_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={obj_id}&key={obj_id}"
+                        download_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={obj_id}&key={key_id}"
                     
                     # Fetch file bytes via Playwright request with Referer header & in-flight session refresh on 401/403
                     file_bytes = None
@@ -1635,7 +1647,7 @@ class ScraperJob:
 def scrape_photos_and_text(page: Any) -> List[Dict[str, str]]:
     """
     Finds all photo/video attachment URLs on the page via in-browser JS evaluation (from working main.py skill code),
-    along with rawHref, isVideo flags, date overlay text, and card comments.
+    along with rawHref, keyId, objIdParam, isVideo flags, date overlay text, and card comments.
     """
     js_code = """
     () => {
@@ -1653,14 +1665,22 @@ def scrape_photos_and_text(page: Any) -> List[Dict[str, str]]:
                     isVideo = true;
                 }
             }
-            if (!src || (!src.includes('obj_attachment') && !src.startsWith('http'))) {
-                const tile = li.querySelector('div.tile.pointable, div.tile');
-                if (tile) {
-                    const style = tile.getAttribute('style') || '';
-                    const match = style.match(/url\\(['"]?([^'"]+)['"]?\\)/);
+            let styleAttr = '';
+            const tile = li.querySelector('div.tile.pointable, div.tile');
+            if (tile) {
+                styleAttr = tile.getAttribute('style') || '';
+                if (!src || (!src.includes('obj_attachment') && !src.startsWith('http'))) {
+                    const match = styleAttr.match(/url\\(['"]?([^'"]+)['"]?\\)/);
                     if (match) src = match[1];
                 }
             }
+            
+            const fullSearchString = src + ' ' + rawHref + ' ' + styleAttr;
+            const keyMatch = fullSearchString.match(/key=([^&"'\\s]+)/);
+            const objMatch = fullSearchString.match(/obj=([^&"'\\s]+)/);
+            
+            const keyId = keyMatch ? keyMatch[1] : '';
+            const objIdParam = objMatch ? objMatch[1] : '';
             
             if (src && (src.includes('obj_attachment') || src.includes('/remote/v1/') || src.startsWith('http') || isVideo)) {
                 const dateEl = li.querySelector('.header span.name span') || 
@@ -1675,6 +1695,8 @@ def scrape_photos_and_text(page: Any) -> List[Dict[str, str]]:
                 items.push({
                     src: src,
                     rawHref: rawHref,
+                    keyId: keyId,
+                    objIdParam: objIdParam,
                     isVideo: isVideo,
                     dateText: dateText,
                     commentText: commentText
