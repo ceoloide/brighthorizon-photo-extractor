@@ -91,6 +91,13 @@ def get_current_tenant(
 
 _active_verifications: Dict[str, Dict[str, Any]] = {}
 
+def _get_valid_session_expires_at(config: dict) -> int:
+    exp = config.get("session_expires_at")
+    now_ms = int(time.time() * 1000)
+    if exp and isinstance(exp, (int, float)) and exp > now_ms:
+        return int(exp)
+    return now_ms + (86400 * 1000)
+
 def _start_verification_thread(email: str, password: str, tenant_storage: TenantStorage) -> Dict[str, Any]:
     tenant_id = tenant_storage.tenant_id
     config = tenant_storage.load_config()
@@ -100,7 +107,7 @@ def _start_verification_thread(email: str, password: str, tenant_storage: Tenant
     # Fast-path: If password matches stored valid password for this account, bypass Playwright verification
     if stored_password and password == stored_password:
         token = create_jwt_token(email, tenant_id)
-        session_expires_at = config.get("session_expires_at") or int((time.time() + 900) * 1000)
+        session_expires_at = _get_valid_session_expires_at(config)
         children = config.get("children", [])
         state = {
             "status": "success",
@@ -335,7 +342,7 @@ def get_me(request: Request, authorization: Optional[str] = Header(None)):
         res.delete_cookie("bh_tenant_token")
         return res
 
-    session_expires_at = config.get("session_expires_at") or int((time.time() + 900) * 1000)
+    session_expires_at = _get_valid_session_expires_at(config)
     
     return {
         "authenticated": True,

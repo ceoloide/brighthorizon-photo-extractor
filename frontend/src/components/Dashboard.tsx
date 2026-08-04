@@ -118,11 +118,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
       if (rem <= 300 && rem > 0 && !dismissedSessionWarning) {
         setShowSessionWarningModal(true);
       }
-
-      // Automatically handle session expiration
-      if (rem <= 0) {
-        handleReauthenticateNow();
-      }
     };
 
     updateTimer();
