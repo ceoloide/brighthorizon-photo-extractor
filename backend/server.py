@@ -93,6 +93,11 @@ _active_verifications: Dict[str, Dict[str, Any]] = {}
 
 def _start_verification_thread(email: str, password: str, tenant_storage: TenantStorage) -> Dict[str, Any]:
     tenant_id = tenant_storage.tenant_id
+    if tenant_id in _active_jobs and _active_jobs[tenant_id].status.get("state") == "running":
+        raise HTTPException(
+            status_code=409,
+            detail="An extraction job is currently running for this account. Re-authentication is blocked to protect the active extraction job."
+        )
     state = {
         "status": "running",
         "step": "Starting headless browser & Cloudflare challenge check...",
