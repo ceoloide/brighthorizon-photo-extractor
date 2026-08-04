@@ -1431,7 +1431,7 @@ class ScraperJob:
                     else:
                         obj_id = obj_ids[0]
 
-                    is_video = bool(re.search(r'\.(mp4|mov|webm)\b', src, re.I)) or "video" in src.lower()
+                    is_video = item.get("isVideo", False) or bool(re.search(r'\.(mp4|mov|webm)\b', src, re.I)) or "video" in src.lower() or item.get("rawHref", "").startswith("#")
 
                     # Check manifest for existing item
                     existing_entry = False
@@ -1519,6 +1519,53 @@ class ScraperJob:
                         continue
                         
                     ext = detect_extension(file_bytes, mime_type)
+
+                    # Video Stream Resolution: If item is flagged as video but fetched payload is a JPEG/PNG preview image,
+                    # open the fancybox modal to capture the true video stream URL (<video src="..."> or <source src="...">)
+                    if is_video and ext in ["jpg", "png", "jpeg"]:
+                        self.log(f"[Video Stream Resolution] Post obj_id {obj_id[:8]}... returned preview image ({ext}). Opening video modal to extract MP4 stream...")
+                        try:
+                            raw_href = item.get("rawHref", "")
+                            target_loc = None
+                            if raw_href:
+                                target_loc = page.locator(f"a.fancybox[href='{raw_href}']").first
+                            if not target_loc or target_loc.count() == 0:
+                                target_loc = page.locator(f"li:has(div.tile[style*='{obj_id}']) a.fancybox").first
+                                
+                            if target_loc and target_loc.count() > 0:
+                                target_loc.click()
+                                page.wait_for_timeout(2000)
+                                
+                                video_el = page.locator(".fancybox-inner video, .fancybox-inner source, .fancybox-content video, .fancybox-content source, video, source").first
+                                v_url = None
+                                if video_el.count() > 0:
+                                    v_url = video_el.get_attribute("src")
+                                    if not v_url or v_url.startswith("blob:"):
+                                        try:
+                                            v_url = video_el.evaluate("el => el.currentSrc || el.src || ''")
+                                        except Exception:
+                                            pass
+
+                                if v_url and not v_url.startswith("blob:") and ("http" in v_url or "obj" in v_url or "remote" in v_url):
+                                    v_download_url = v_url if v_url.startswith("http") else f"https://mybrightday.brighthorizons.com{v_url}"
+                                    self.log(f"[Video Stream Resolution] Found video stream URL for {obj_id[:8]}...: {v_download_url[:70]}...")
+                                    v_resp = page.request.get(v_download_url, headers=req_headers, timeout=120000)
+                                    if v_resp and v_resp.status == 200:
+                                        v_bytes = v_resp.body()
+                                        v_ext = detect_extension(v_bytes, v_resp.headers.get("content-type", ""))
+                                        if v_ext in ["mp4", "mov", "webm"]:
+                                            file_bytes = v_bytes
+                                            ext = v_ext
+                                            mime_type = f"video/{v_ext}"
+                                            self.log(f"[Video Stream Resolution] Successfully retrieved full video stream ({v_ext}, {len(file_bytes)} bytes) for {obj_id[:8]}...")
+
+                                try:
+                                    page.keyboard.press("Escape")
+                                    page.wait_for_timeout(400)
+                                except Exception:
+                                    pass
+                        except Exception as modal_err:
+                            self.log(f"[Video Stream Resolution Notice] Modal resolution notice for {obj_id[:8]}: {modal_err}")
                     
                     current_manifest = self.tenant_storage.load_manifest()
                     existing_for_day = [
@@ -1588,7 +1635,7 @@ class ScraperJob:
 def scrape_photos_and_text(page: Any) -> List[Dict[str, str]]:
     """
     Finds all photo/video attachment URLs on the page via in-browser JS evaluation (from working main.py skill code),
-    along with date overlay text and card comments.
+    along with rawHref, isVideo flags, date overlay text, and card comments.
     """
     js_code = """
     () => {
@@ -1597,8 +1644,14 @@ def scrape_photos_and_text(page: Any) -> List[Dict[str, str]]:
         timeline.querySelectorAll('ul.thumbnails li').forEach(li => {
             const a = li.querySelector('a.fancybox');
             let src = '';
+            let rawHref = '';
+            let isVideo = false;
             if (a) {
-                src = a.getAttribute('href') || '';
+                rawHref = a.getAttribute('href') || '';
+                src = rawHref;
+                if (rawHref.startsWith('#') || (!rawHref.includes('obj_attachment') && !rawHref.startsWith('http'))) {
+                    isVideo = true;
+                }
             }
             if (!src || (!src.includes('obj_attachment') && !src.startsWith('http'))) {
                 const tile = li.querySelector('div.tile.pointable, div.tile');
@@ -1609,7 +1662,7 @@ def scrape_photos_and_text(page: Any) -> List[Dict[str, str]]:
                 }
             }
             
-            if (src && (src.includes('obj_attachment') || src.includes('/remote/v1/') || src.startsWith('http'))) {
+            if (src && (src.includes('obj_attachment') || src.includes('/remote/v1/') || src.startsWith('http') || isVideo)) {
                 const dateEl = li.querySelector('.header span.name span') || 
                                li.querySelector('span.name span') || 
                                li.querySelector('.header span.name') || 
@@ -1621,6 +1674,8 @@ def scrape_photos_and_text(page: Any) -> List[Dict[str, str]]:
                 
                 items.push({
                     src: src,
+                    rawHref: rawHref,
+                    isVideo: isVideo,
                     dateText: dateText,
                     commentText: commentText
                 });
