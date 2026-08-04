@@ -10,16 +10,56 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [verifying, setVerifying] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !password) {
       setError('Please enter both email and password.');
       return;
     }
     setError(null);
-    setVerifying(true);
+    setSubmitting(true);
+
+    try {
+      const res = await fetch('/api/auth/verify-progress', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim().toLowerCase(), password })
+      });
+      const data = await res.json();
+
+      if (res.ok && data.status === 'success' && data.token) {
+        // Fast-path success: stored password matches! Skip interstitial completely
+        localStorage.setItem('bh_token', data.token);
+        localStorage.setItem('bh_email', email.trim().toLowerCase());
+        onLoginSuccess(data.token, { ...data, email: data.email || email });
+        return;
+      }
+
+      if (!res.ok) {
+        const errMsg = data.detail || data.message || data.error || 'Authentication check failed.';
+        setError(errMsg);
+        setSubmitting(false);
+        return;
+      }
+
+      if (data.status === 'failed') {
+        const errMsg = data.error || 'Authentication check failed.';
+        setError(errMsg);
+        setSubmitting(false);
+        return;
+      }
+
+      // Full verification needed (new credentials/profile): launch interstitial
+      setSubmitting(false);
+      setVerifying(true);
+    } catch (err: any) {
+      console.error('Error during fast-path verification check:', err);
+      setSubmitting(false);
+      setVerifying(true);
+    }
   };
 
   if (verifying) {
@@ -96,9 +136,17 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
 
           <button
             type="submit"
-            className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl transition flex justify-center items-center gap-2 text-sm shadow-sm active:scale-[0.99]"
+            disabled={submitting}
+            className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl transition flex justify-center items-center gap-2 text-sm shadow-sm active:scale-[0.99] disabled:opacity-60"
           >
-            <span>Sign In & Verify Account</span>
+            {submitting ? (
+              <>
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                <span>Checking Credentials...</span>
+              </>
+            ) : (
+              <span>Sign In & Verify Account</span>
+            )}
           </button>
         </form>
 
