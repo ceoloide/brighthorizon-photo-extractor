@@ -1661,16 +1661,43 @@ def parse_date(date_text: str, timeframe_text: str) -> str:
     return f"{year_val:04d}-{now.month:02d}-{now.day:02d}"
 
 def detect_extension(file_bytes: bytes, content_type: str) -> str:
-    """Inspects magic bytes to determine file extension."""
+    """Inspects magic bytes to determine file extension (ported from main.py skill code)."""
+    if not file_bytes:
+        return "jpg"
+        
+    # Check Image Magic Bytes
     if file_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
         return "png"
-    elif file_bytes.startswith(b"\xff\xd8"):
+    if file_bytes.startswith(b"\xff\xd8"):
         return "jpg"
-    elif b"ftyp" in file_bytes[:64] or b"moov" in file_bytes[:64] or b"mdat" in file_bytes[:64]:
-        return "mov" if b"ftypqt" in file_bytes[:64] else "mp4"
-    if "png" in content_type: return "png"
-    if "mp4" in content_type: return "mp4"
-    if "video" in content_type: return "mp4"
+    if file_bytes.startswith(b"RIFF") and file_bytes[8:12] == b"WEBP":
+        return "webp"
+    if file_bytes.startswith(b"GIF87a") or file_bytes.startswith(b"GIF89a"):
+        return "gif"
+        
+    # Video Check (MP4/MOV container signatures)
+    if b"ftypmp4" in file_bytes[:30] or b"ftypisom" in file_bytes[:30] or (len(file_bytes) > 8 and file_bytes[4:8] == b"ftyp") or b"moov" in file_bytes[:64] or b"mdat" in file_bytes[:64]:
+        if b"qt  " in file_bytes[:30] or b"ftypqt" in file_bytes[:30]:
+            return "mov"
+        return "mp4"
+        
+    # Fallback to headers
+    ct = content_type.lower() if content_type else ""
+    if "png" in ct:
+        return "png"
+    elif "heic" in ct:
+        return "heic"
+    elif "gif" in ct:
+        return "gif"
+    elif "mp4" in ct:
+        return "mp4"
+    elif "quicktime" in ct or "mov" in ct:
+        return "mov"
+    elif "video/webm" in ct or "webm" in ct:
+        return "webm"
+    elif "video/" in ct:
+        return "mp4"
+        
     return "jpg"
 
 def set_eastern_timestamp(file_path: str, date_str: str):
