@@ -10,7 +10,7 @@ Spec reference: .agents/explorer_m1_1/analysis.md & .agents/explorer_m1_3/analys
 import re
 import html
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Callable
 from playwright.sync_api import Page, BrowserContext, Locator
 
 # -----------------------------------------------------------------------------
@@ -356,7 +356,7 @@ def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 30
                                     ready_count += 1
                     
                     if ready_count >= p_count or (p_count > 0 and ready_count > 0 and (time.time() - start_time > 5.0)):
-                        log_fn(f"Timeframe month '{tf_text}' loaded with {p_count} feed items ({ready_count} fully populated).")
+                        log_fn(f"Timeframe month '{tf_text}': Discovered {p_count} total <li> cards ({ready_count} matching a.fancybox href / video targets).")
                         return True
             except Exception:
                 pass
@@ -367,7 +367,7 @@ def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 30
     return False
 
 
-def extract_feed_items(page: Page, timeframe_year: Optional[int] = None) -> List[Dict[str, Any]]:
+def extract_feed_items(page: Page, timeframe_year: Optional[int] = None, logger: Optional[Callable[[str], None]] = None) -> List[Dict[str, Any]]:
     """
     Extracts timeline feed items strictly scoped inside 'div.well.left-panel.pull-left' (Rule 2.B).
     Parses direct GCS signed URLs, photo vs video background-image CSS, and overlay dates.
@@ -379,9 +379,12 @@ def extract_feed_items(page: Page, timeframe_year: Optional[int] = None) -> List
     # Rule 2.B: Scope search strictly inside left-panel timeline well
     timeline = page.locator("div.well.left-panel.pull-left")
     if timeline.count() == 0:
+        if logger:
+            logger("Feed Item Parser: No timeline well 'div.well.left-panel.pull-left' found on page.")
         return []
 
     feed_lis = timeline.locator("ul.thumbnails li").all()
+    total_lis = len(feed_lis)
 
     for li in feed_lis:
         try:
@@ -441,6 +444,9 @@ def extract_feed_items(page: Page, timeframe_year: Optional[int] = None) -> List
             })
         except Exception:
             continue
+
+    if logger:
+        logger(f"Feed Item Parser: Found {total_lis} total <li> cards, {len(items)} with valid a.fancybox href / video targets.")
 
     return items
 

@@ -205,7 +205,7 @@ class NetworkTraceLogger:
                                 redacted_cookies.append(f"{name}=[REDACTED]")
                 details["set_cookies"] = redacted_cookies
 
-            level = "INFO" if status < 400 else ("WARN" if status < 500 else "ERROR")
+            level = "DEBUG" if status < 400 else ("WARN" if status < 500 else "ERROR")
             self.job.log_structured(
                 level=level,
                 category="NETWORK_RESP",
@@ -1405,7 +1405,7 @@ class ScraperJob:
                 continue
 
             # Extract Feed Items directly from DOM
-            feed_items = extract_feed_items(page, timeframe_year=tf_year)
+            feed_items = extract_feed_items(page, timeframe_year=tf_year, logger=self.log)
             if not feed_items:
                 # Fallback to in-browser JS evaluation if locator returned 0 items
                 js_items = scrape_photos_and_text(page)

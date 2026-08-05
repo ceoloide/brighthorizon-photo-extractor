@@ -76,7 +76,7 @@ def test_network_trace_logger_response_set_cookies(mock_tenant_storage):
     logger._on_response(mock_resp)
     mock_job.log_structured.assert_called_once()
     call_kwargs = mock_job.log_structured.call_args[1]
-    assert call_kwargs["level"] == "INFO"
+    assert call_kwargs["level"] == "DEBUG"
     assert call_kwargs["category"] == "NETWORK_RESP"
     assert call_kwargs["details"]["set_cookies_count"] == 1
 
