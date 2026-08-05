@@ -117,6 +117,35 @@ def test_create_job_adversarial_child_name(tmp_path):
     assert job.child_name == "Etcpasswdbyron"
 
 
+def test_tenant_storage_concurrent_manifest_writes(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from backend.database import TenantStorage
+
+    storage = TenantStorage(email="test_concurrent@example.com")
+    
+    def _write_media(i):
+        obj_id = f"obj_{i:03d}"
+        storage.add_media_entry(
+            obj_id=obj_id,
+            child="Byron",
+            date_str="2026-06-15",
+            original_filename=f"Byron 2026-06-15 ({i:02d}).jpg",
+            comment="Test photo",
+            file_bytes=b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01",
+            mime_type="image/jpeg"
+        )
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(_write_media, i) for i in range(20)]
+        for f in futures:
+            f.result()
+
+    manifest = storage.load_manifest()
+    assert len(manifest) == 20
+    obj_ids = {entry["obj_id"] for entry in manifest.values()}
+    assert len(obj_ids) == 20
+
+
 # =============================================================================
 # Category 3: Auto-Discovery Integration Tests
 # =============================================================================

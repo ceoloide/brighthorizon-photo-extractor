@@ -169,52 +169,57 @@ def parse_date_overlay(date_text: str, timeframe_year: Optional[int] = None) -> 
     return fallback_date
 
 
-def extract_obj_id_from_url_or_style(href: str = "", style: str = "") -> Tuple[Optional[str], bool, str]:
+def extract_obj_id_from_url_or_style(href: str = "", style: str = "", rel: str = "") -> Tuple[Optional[str], bool, str]:
     """
-    Extracts attachment obj_id, is_video boolean flag, and resolved_url from a post tile.
+    Extracts attachment obj_id, is_video boolean flag, and resolved_url from post elements.
+    Handles direct Google Cloud Storage signed URLs (https://storage.googleapis.com/mbd-attachments-prod/<obj_id>/...)
+    as well as legacy /remote/v1/obj_attachment endpoints and style background-image properties.
     
     Returns: (obj_id, is_video, resolved_url)
     """
     href_clean = html.unescape(href.strip()) if href else ""
     style_clean = html.unescape(style.strip()) if style else ""
-    is_video = href_clean.startswith("#") or not href_clean or ("obj_attachment" not in href_clean and "obj=" not in href_clean)
+    rel_clean = html.unescape(rel.strip()) if rel else ""
 
-    # 1. Check if href is a direct obj_attachment URL (standard photo posts)
-    m_href_obj = re.search(r'obj=([^&#]+)', href_clean)
-    if m_href_obj and not href_clean.startswith("#"):
-        return m_href_obj.group(1), False, href_clean
+    is_video = href_clean.startswith("#") or bool(re.search(r'\.(mp4|mov|webm)\b', rel_clean, re.I)) or "video" in rel_clean.lower() or "video" in href_clean.lower()
 
-    # 2. Check CSS background-image url(...) from tile style (video posts / tile thumbnails)
-    urls = []
+    # 1. Check direct GCS signed URL in rel (for video elements <div id="..." rel="https://storage.googleapis.com/...">)
+    m_gcs_rel = re.search(r'/mbd-attachments-prod/([a-f0-9]{12,64})/', rel_clean)
+    if m_gcs_rel:
+        return m_gcs_rel.group(1), True, rel_clean
+
+    # 2. Check direct GCS signed URL in href (for photo elements <a href="https://storage.googleapis.com/...">)
+    m_gcs_href = re.search(r'/mbd-attachments-prod/([a-f0-9]{12,64})/', href_clean)
+    if m_gcs_href:
+        return m_gcs_href.group(1), is_video, href_clean
+
+    # 3. Check direct GCS signed URL in style background-image
     for match in re.finditer(r'url\(\s*[\'"]?([^\'"\)]+)[\'"]?\s*\)', style_clean, re.IGNORECASE):
-        raw_u = match.group(1).strip()
-        u = html.unescape(raw_u)
-        urls.append(u)
+        u = html.unescape(match.group(1).strip())
+        m_gcs_style = re.search(r'/mbd-attachments-prod/([a-f0-9]{12,64})/', u)
+        if m_gcs_style:
+            return m_gcs_style.group(1), is_video, u
 
-    target_url = None
-    for u in urls:
-        if "obj_attachment" in u or "obj=" in u:
-            target_url = u
-            break
-            
-    if target_url:
-        match_obj = re.search(r'obj=([^&#]+)', target_url)
-        if match_obj:
-            return match_obj.group(1), is_video, target_url
+    # 4. Check legacy obj_attachment URL params in href, rel, or style
+    for candidate in [href_clean, rel_clean, style_clean]:
+        if candidate and not candidate.startswith("#"):
+            m_obj = re.search(r'obj=([^&#"\'\)\s]+)', candidate)
+            if m_obj:
+                return m_obj.group(1), is_video, candidate
 
-    # 3. Fallback: video post fragment anchor (e.g. #6986168d2bb117b0dc910b3b-default)
+    # 5. Fallback: video fragment anchor (#6986168d2bb117b0dc910b3b-default)
     if href_clean.startswith("#"):
         frag = href_clean.lstrip("#")
         m_frag = re.search(r'([a-f0-9]{12,64})', frag, re.IGNORECASE)
         if m_frag:
             video_obj_id = m_frag.group(1)
-            video_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={video_obj_id}&key={video_obj_id}"
+            video_url = rel_clean if rel_clean.startswith("http") else f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={video_obj_id}&key={video_obj_id}"
             return video_obj_id, True, video_url
 
-    resolved_url = target_url or href_clean
-    match_obj = re.search(r'obj=([^&#]+)', resolved_url)
-    if match_obj:
-        return match_obj.group(1), is_video, resolved_url
+    resolved_url = rel_clean or href_clean
+    m_res = re.search(r'obj=([^&#"\'\)\s]+)', resolved_url)
+    if m_res:
+        return m_res.group(1), is_video, resolved_url
 
     return None, is_video, resolved_url
 
@@ -283,10 +288,89 @@ def click_timeframe_tile(page: Page, tile_locator: Any) -> bool:
         return False
 
 
+def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 300.0, max_retries: int = 2, logger=None) -> bool:
+    """
+    Dynamically waits up to max_wait_sec for Knockout.js feed items or 'no events for the month' indicator.
+    Supports re-clicking the month tile up to max_retries times if loading stalls.
+    
+    Returns True if month has events and media URLs are fully populated.
+    Returns False if confirmed empty or timed out.
+    """
+    import time
+    log_fn = logger if logger else print
+
+    for attempt in range(max_retries + 1):
+        if attempt > 0:
+            log_fn(f"[Retry #{attempt}/{max_retries}] Re-clicking timeframe month tile '{tf_text}'...")
+            try:
+                clicked = page.evaluate("""
+                    (text) => {
+                        const targetText = text.replace(/\\s+/g, ' ').trim().toLowerCase();
+                        const el = Array.from(document.querySelectorAll('li')).find(item => {
+                            const cleanItemText = (item.innerText || item.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                            return cleanItemText === targetText;
+                        });
+                        if (el) {
+                            const clickable = el.querySelector('div.tile') || el.querySelector('div') || el;
+                            clickable.click();
+                            return true;
+                        }
+                        return false;
+                    }
+                """, tf_text)
+            except Exception as e:
+                log_fn(f"Re-click tile exception: {e}")
+
+        start_time = time.time()
+        while time.time() - start_time < (max_wait_sec / (max_retries + 1)):
+            try:
+                empty_loc = page.locator("div:has(> h1:has-text('no events for the month'))").first
+                timeline = page.locator("div.well.left-panel.pull-left")
+                posts_loc = timeline.locator("ul.thumbnails li") if timeline.count() > 0 else page.locator("div.well.left-panel.pull-left ul.thumbnails li")
+                
+                # Check for empty month header
+                if empty_loc.count() > 0 and empty_loc.is_visible():
+                    # Wait 2.5s false-positive safety buffer to verify no post items arrive
+                    page.wait_for_timeout(2500)
+                    if posts_loc.count() == 0:
+                        log_fn(f"Timeframe month '{tf_text}' confirmed empty ('no events for the month').")
+                        return False
+                
+                # Check for feed items
+                p_count = posts_loc.count()
+                if p_count > 0:
+                    # Verify DOM readiness: ensure all items have populated URLs
+                    ready_count = 0
+                    lis = posts_loc.all()
+                    for li in lis:
+                        fancybox = li.locator("a.fancybox").first
+                        if fancybox.count() > 0:
+                            href = fancybox.get_attribute("href") or ""
+                            if href.startswith("http") or href.startswith("https://storage.googleapis.com") or "obj_attachment" in href:
+                                ready_count += 1
+                            elif href.startswith("#"):
+                                div_id = href.lstrip("#")
+                                rel_div = li.locator(f"div#{div_id}").first
+                                rel_url = rel_div.get_attribute("rel") if rel_div.count() > 0 else ""
+                                if rel_url and ("http" in rel_url or "storage.googleapis.com" in rel_url or "obj" in rel_url):
+                                    ready_count += 1
+                    
+                    if ready_count >= p_count or (p_count > 0 and ready_count > 0 and (time.time() - start_time > 5.0)):
+                        log_fn(f"Timeframe month '{tf_text}' loaded with {p_count} feed items ({ready_count} fully populated).")
+                        return True
+            except Exception:
+                pass
+            
+            page.wait_for_timeout(250)
+
+    log_fn(f"Timed out waiting for timeframe month '{tf_text}' after {max_retries + 1} attempts.")
+    return False
+
+
 def extract_feed_items(page: Page, timeframe_year: Optional[int] = None) -> List[Dict[str, Any]]:
     """
     Extracts timeline feed items strictly scoped inside 'div.well.left-panel.pull-left' (Rule 2.B).
-    Parses photo vs video background-image CSS and HTML unescaped URLs (Rule 2.C).
+    Parses direct GCS signed URLs, photo vs video background-image CSS, and overlay dates.
 
     Returns list of dictionaries representing parsed feed items.
     """
@@ -295,7 +379,6 @@ def extract_feed_items(page: Page, timeframe_year: Optional[int] = None) -> List
     # Rule 2.B: Scope search strictly inside left-panel timeline well
     timeline = page.locator("div.well.left-panel.pull-left")
     if timeline.count() == 0:
-        # Strictly return empty list if timeline panel is missing to avoid querying top-bar child thumbnails
         return []
 
     feed_lis = timeline.locator("ul.thumbnails li").all()
@@ -310,17 +393,39 @@ def extract_feed_items(page: Page, timeframe_year: Optional[int] = None) -> List
             pointable_tile = li.locator("div.tile.pointable, div.tile").first
             style_attr = pointable_tile.get_attribute("style") or "" if pointable_tile.count() > 0 else ""
 
-            obj_id, is_video, resolved_url = extract_obj_id_from_url_or_style(raw_href, style_attr)
+            rel_attr = ""
+            if raw_href.startswith("#"):
+                div_id = raw_href.lstrip("#")
+                try:
+                    vid_div = li.locator(f"div#{div_id}").first
+                    if vid_div.count() > 0:
+                        rel_attr = vid_div.get_attribute("rel") or ""
+                except Exception:
+                    pass
+
+            obj_id, is_video, resolved_url = extract_obj_id_from_url_or_style(raw_href, style_attr, rel_attr)
             if not obj_id:
                 continue
 
             # Overlay date parsing
-            overlay_span = li.locator("span.name span").first
-            raw_date = overlay_span.inner_text().strip() if overlay_span.count() > 0 else ""
+            raw_date = ""
+            try:
+                overlay_span = li.locator("span.name span").first
+                raw_date = (overlay_span.inner_text() or "").strip()
+            except Exception:
+                pass
             date_str = parse_date_overlay(raw_date, timeframe_year=timeframe_year)
 
+            # Footer comment parsing
+            comment_text = ""
+            try:
+                footer_note = li.locator(".footer.note").first
+                comment_text = (footer_note.inner_text() or "").strip()
+            except Exception:
+                pass
+
             media_type = "video" if is_video else "photo"
-            download_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={obj_id}&key={obj_id}"
+            download_url = resolved_url if resolved_url.startswith("http") else f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={obj_id}&key={obj_id}"
 
             items.append({
                 "obj_id": obj_id,
@@ -331,12 +436,14 @@ def extract_feed_items(page: Page, timeframe_year: Optional[int] = None) -> List
                 "download_url": download_url,
                 "date_str": date_str,
                 "raw_date_text": raw_date,
+                "comment_text": comment_text,
                 "locator": li
             })
         except Exception:
             continue
 
     return items
+
 
 
 def dismiss_cdk_overlays(page: Page):

@@ -16,8 +16,14 @@ from zoneinfo import ZoneInfo
 from playwright.sync_api import sync_playwright, BrowserContext, Page
 import hashlib
 from urllib.parse import urlparse, parse_qs
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from backend.database import TenantStorage
-from backend.dom_parser import extract_obj_id_from_url_or_style, get_month_end_date
+from backend.dom_parser import (
+    extract_obj_id_from_url_or_style,
+    get_month_end_date,
+    wait_for_month_feed_ready,
+    extract_feed_items,
+)
 
 try:
     from playwright_stealth import stealth_sync
@@ -1345,7 +1351,7 @@ class ScraperJob:
 
             self.status["current_month"] = tf_text
             
-            # Point (3) Optimization: check if timeframe month's end date is strictly prior to start_date
+            # Start Date Filter Check
             if self.start_date:
                 m_end = get_month_end_date(tf_text)
                 if m_end and m_end < self.start_date:
@@ -1355,7 +1361,7 @@ class ScraperJob:
             try:
                 self.log(f"Navigating to timeframe: {tf_text}...")
                 
-                # Click timeframe button dynamically targeting inner div.tile (ported from main.py skill code)
+                # Click timeframe tile targeting inner div.tile
                 clicked = page.evaluate("""
                     (text) => {
                         const targetText = text.replace(/\\s+/g, ' ').trim().toLowerCase();
@@ -1385,233 +1391,186 @@ class ScraperJob:
                                     break
                             except Exception:
                                 pass
-
-                page.wait_for_timeout(3000)  # Wait for Knockout.js feed reload
             except Exception as nav_err:
                 self.log(f"Navigation notice for month '{tf_text}': {nav_err}. Continuing to next month...")
                 continue
-                
-            # Smart Month Feed Monitor: Check if empty month indicator is visible
-            empty_loc = page.locator("div:has(> h1:has-text('no events for the month'))").first
-            if empty_loc.count() > 0 and empty_loc.is_visible():
-                self.log(f"Timeframe month '{tf_text}' has no events ('no events for the month' detected). Advancing to next month immediately...")
+
+            # Dynamic Wait & Month Feed Readiness Verification
+            tf_parts = tf_text.split()
+            tf_year = int(tf_parts[1]) if len(tf_parts) == 2 and tf_parts[1].isdigit() else None
+            
+            has_feed = wait_for_month_feed_ready(page, tf_text, max_wait_sec=300.0, max_retries=2, logger=self.log)
+            if not has_feed:
+                self.log(f"Skipping empty or unpopulated timeframe month '{tf_text}'.")
                 continue
-                
-            # Scroll to trigger lazy loading for all posts in this timeframe (ported from main.py skill code)
-            self.log(f"Scrolling page to load historical posts for {tf_text}...")
-            self.scroll_and_load(page)
+
+            # Extract Feed Items directly from DOM
+            feed_items = extract_feed_items(page, timeframe_year=tf_year)
+            if not feed_items:
+                # Fallback to in-browser JS evaluation if locator returned 0 items
+                js_items = scrape_photos_and_text(page)
+                for ji in js_items:
+                    o_id = ji.get("objIdParam") or ji.get("keyId")
+                    if not o_id:
+                        m_o = re.search(r'obj=([^&]+)', ji.get("src", ""))
+                        o_id = m_o.group(1) if m_o else hashlib.md5(ji.get("src", "").encode()).hexdigest()
+                    date_str = parse_date(ji.get("dateText", ""), tf_text) or datetime.now().strftime("%Y-%m-%d")
+                    feed_items.append({
+                        "obj_id": o_id,
+                        "media_type": "video" if ji.get("isVideo") else "photo",
+                        "is_video": ji.get("isVideo", False),
+                        "download_url": ji.get("src", ""),
+                        "date_str": date_str,
+                        "comment_text": ji.get("commentText", "")
+                    })
+
+            self.log(f"Extracted {len(feed_items)} feed items from timeframe {tf_text}.")
             
-            # Scrape photo and video targets via atomic in-browser JS evaluation (ported from main.py skill code)
-            photo_items = scrape_photos_and_text(page)
-            self.log(f"Extracted {len(photo_items)} posts from timeframe {tf_text}.")
-            
-            for item in photo_items:
+            # Prepare download tasks and check manifest deduplication
+            download_queue = []
+            manifest = self.tenant_storage.load_manifest()
+
+            for item in feed_items:
                 if self._cancelled:
                     self.log("Extraction cancelled by user.")
                     return
 
-                try:
-                    src = item.get("src", "")
-                    date_text = item.get("dateText", "")
-                    comment_text = item.get("commentText", "")
+                obj_id = item.get("obj_id")
+                if not obj_id:
+                    continue
 
-                    if not src:
-                        continue
+                existing_entry = False
+                existing_manifest_entry = None
+                for m_id, entry in manifest.items():
+                    if entry.get("obj_id") == obj_id:
+                        existing_entry = True
+                        existing_manifest_entry = entry
+                        break
 
-                    # Extract obj_id and key_id from item parameters or src
-                    obj_id = item.get("objIdParam")
-                    key_id = item.get("keyId")
-
-                    if not obj_id:
-                        parsed_url = urlparse(src)
-                        query_params = parse_qs(parsed_url.query)
-                        obj_ids = query_params.get("obj")
-                        if obj_ids:
-                            obj_id = obj_ids[0]
-                        else:
-                            m_obj = re.search(r'obj=([^&]+)', src)
-                            obj_id = m_obj.group(1) if m_obj else hashlib.md5(src.encode("utf-8")).hexdigest()
-
-                    if not key_id:
-                        parsed_url = urlparse(src)
-                        query_params = parse_qs(parsed_url.query)
-                        key_ids = query_params.get("key")
-                        if key_ids:
-                            key_id = key_ids[0]
-                        else:
-                            m_key = re.search(r'key=([^&]+)', src)
-                            key_id = m_key.group(1) if m_key else obj_id
-
-                    is_video = item.get("isVideo", False) or bool(re.search(r'\.(mp4|mov|webm)\b', src, re.I)) or "video" in src.lower() or item.get("rawHref", "").startswith("#")
-
-                    # Check manifest for existing item
-                    existing_entry = False
-                    existing_manifest_entry = None
-                    for m_id, entry in manifest.items():
-                        if entry.get("obj_id") == obj_id:
-                            existing_entry = True
-                            existing_manifest_entry = entry
-                            break
-                            
-                    if existing_entry:
-                        fn = existing_manifest_entry.get("original_filename", "media") if existing_manifest_entry else "media"
-                        if self.sync_mode == "incremental":
-                            self.log(f"[Incremental Sync] Hit existing item obj_id {obj_id[:8]}... ('{fn}'). Halting child feed scan.")
-                            return
-                        else:
-                            self.log(f"[Skipped / Existing] Item obj_id {obj_id[:8]}... already downloaded as '{fn}'. Skipping.")
-                            continue
-
-                    # Parse date overlay
-                    date_str = parse_date(date_text, tf_text)
-                    if not date_str and comment_text:
-                        date_str = parse_date(comment_text, tf_text)
-                    if not date_str:
-                        date_str = datetime.now().strftime("%Y-%m-%d")
-
-                    self.status["current_date"] = date_str
-
-                    # Check Custom Start Date condition
-                    if self.start_date and date_str < self.start_date:
-                        self.log(f"Post date {date_str} is before custom start date {self.start_date}. Skipping.")
-                        continue
-                        
-                    self.log(f"[Downloading] Intercepted new media item (obj_id: {obj_id[:8]}..., key_id: {key_id[:8]}..., type: {'video' if is_video else 'photo'}, date: {date_str}). Fetching binary...")
-                        
-                    # Extract full res URL
-                    if src.startswith("http"):
-                        download_url = src
-                    elif src.startswith("/remote/v1/obj_attachment"):
-                        clean_path = re.sub(r'thumbnail=true&?', '', src).rstrip('&?')
-                        download_url = f"https://mybrightday.brighthorizons.com{clean_path}"
+                if existing_entry:
+                    fn = existing_manifest_entry.get("original_filename", "media") if existing_manifest_entry else "media"
+                    if self.sync_mode == "incremental":
+                        self.log(f"[Incremental Sync] Hit existing item obj_id {obj_id[:8]}... ('{fn}'). Halting child feed scan.")
+                        return
                     else:
-                        download_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={obj_id}&key={key_id}"
-                    
-                    # Fetch file bytes via Playwright request with Referer header & in-flight session refresh on 401/403
-                    file_bytes = None
-                    mime_type = "video/mp4" if is_video else "image/jpeg"
-                    req_headers = {
-                        "Referer": "https://mybrightday.brighthorizons.com/dashboard/parents.html",
-                        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-                    }
-                    for attempt in range(3):
-                        try:
-                            response = page.request.get(download_url, headers=req_headers, timeout=120000)
-                            if response.status == 200:
-                                body_data = response.body()
-                                try:
-                                    json_data = json.loads(body_data.decode("utf-8"))
-                                    if isinstance(json_data, dict) and "signed_url" in json_data:
-                                        signed_url = json_data["signed_url"]
-                                        if "mime_type" in json_data and json_data["mime_type"]:
-                                            mime_type = json_data["mime_type"]
-                                        media_resp = page.request.get(signed_url, headers={"User-Agent": req_headers["User-Agent"]}, timeout=120000)
-                                        if media_resp.status == 200:
-                                            file_bytes = media_resp.body()
-                                            break
-                                except Exception:
-                                    file_bytes = body_data
-                                    header_mime = response.headers.get("content-type", "")
-                                    if header_mime and "text/html" not in header_mime:
-                                        mime_type = header_mime
-                                    break
-                            elif response.status in [401, 403]:
-                                self.log(f"HTTP {response.status} when fetching obj_id {obj_id[:8]}... Session may be invalid. Triggering in-flight session refresh...")
-                                self.ensure_cross_domain_session(page, context, dependent_id=dep_id)
-                                time.sleep(2.0)
-                            else:
-                                self.log(f"HTTP {response.status} attempt #{attempt + 1} for obj_id {obj_id[:8]}...")
-                        except Exception as fetch_err:
-                            if attempt == 2:
-                                self.log(f"Failed fetching obj_id {obj_id[:8]}... after 3 attempts: {fetch_err}")
-                            else:
-                                time.sleep(2.0)
-
-                    if not file_bytes:
+                        self.log(f"[Skipped / Existing] Item obj_id {obj_id[:8]}... already downloaded as '{fn}'. Skipping.")
                         continue
-                        
-                    ext = detect_extension(file_bytes, mime_type)
 
-                    # Video Stream Resolution: If item is flagged as video but fetched payload is a JPEG/PNG preview image,
-                    # open the fancybox modal to capture the true video stream URL (<video src="..."> or <source src="...">)
-                    if is_video and ext in ["jpg", "png", "jpeg"]:
-                        self.log(f"[Video Stream Resolution] Post obj_id {obj_id[:8]}... returned preview image ({ext}). Opening video modal to extract MP4 stream...")
-                        try:
-                            raw_href = item.get("rawHref", "")
-                            target_loc = None
-                            if raw_href:
-                                target_loc = page.locator(f"a.fancybox[href='{raw_href}']").first
-                            if not target_loc or target_loc.count() == 0:
-                                target_loc = page.locator(f"li:has(div.tile[style*='{obj_id}']) a.fancybox").first
-                                
-                            if target_loc and target_loc.count() > 0:
-                                target_loc.click()
-                                page.wait_for_timeout(2000)
-                                
-                                video_el = page.locator(".fancybox-inner video, .fancybox-inner source, .fancybox-content video, .fancybox-content source, video, source").first
-                                v_url = None
-                                if video_el.count() > 0:
-                                    v_url = video_el.get_attribute("src")
-                                    if not v_url or v_url.startswith("blob:"):
-                                        try:
-                                            v_url = video_el.evaluate("el => el.currentSrc || el.src || ''")
-                                        except Exception:
-                                            pass
+                date_str = item.get("date_str") or parse_date(item.get("raw_date_text", ""), tf_text) or datetime.now().strftime("%Y-%m-%d")
+                
+                if self.start_date and date_str < self.start_date:
+                    self.log(f"Post date {date_str} is before custom start date {self.start_date}. Skipping.")
+                    continue
 
-                                if v_url and not v_url.startswith("blob:") and ("http" in v_url or "obj" in v_url or "remote" in v_url):
-                                    v_download_url = v_url if v_url.startswith("http") else f"https://mybrightday.brighthorizons.com{v_url}"
-                                    self.log(f"[Video Stream Resolution] Found video stream URL for {obj_id[:8]}...: {v_download_url[:70]}...")
-                                    v_resp = page.request.get(v_download_url, headers=req_headers, timeout=120000)
-                                    if v_resp and v_resp.status == 200:
-                                        v_bytes = v_resp.body()
-                                        v_ext = detect_extension(v_bytes, v_resp.headers.get("content-type", ""))
-                                        if v_ext in ["mp4", "mov", "webm"]:
-                                            file_bytes = v_bytes
-                                            ext = v_ext
-                                            mime_type = f"video/{v_ext}"
-                                            self.log(f"[Video Stream Resolution] Successfully retrieved full video stream ({v_ext}, {len(file_bytes)} bytes) for {obj_id[:8]}...")
+                download_queue.append({
+                    "obj_id": obj_id,
+                    "is_video": item.get("is_video", False),
+                    "download_url": item.get("download_url"),
+                    "date_str": date_str,
+                    "comment": item.get("comment_text", "")
+                })
 
-                                try:
-                                    page.keyboard.press("Escape")
-                                    page.wait_for_timeout(400)
-                                except Exception:
-                                    pass
-                        except Exception as modal_err:
-                            self.log(f"[Video Stream Resolution Notice] Modal resolution notice for {obj_id[:8]}: {modal_err}")
-                    
-                    current_manifest = self.tenant_storage.load_manifest()
-                    existing_for_day = [
-                        m for m in current_manifest.values()
-                        if m.get("child") == child_name and m.get("date") == date_str and m.get("obj_id") != obj_id
-                    ]
-                    seq = len(existing_for_day) + 1
-                    if seq == 1:
-                        orig_filename = f"{child_name} {date_str}.{ext}"
-                    else:
-                        orig_filename = f"{child_name} {date_str} ({seq}).{ext}"
+            if not download_queue:
+                continue
 
-                    meta_comment = comment_text if comment_text else f"Bright Horizons photo for {child_name} on {date_str}"
-                    
-                    # Save to tenant storage
-                    saved_entry = self.tenant_storage.add_media_entry(
-                        obj_id=obj_id,
-                        child=child_name,
-                        date_str=date_str,
-                        original_filename=orig_filename,
-                        comment=meta_comment,
-                        file_bytes=file_bytes,
-                        mime_type=mime_type
-                    )
-                    
-                    # Set Eastern Time timestamp (rule 4 in AGENTS.md)
-                    abs_path = os.path.join(self.tenant_storage.tenant_dir, saved_entry["storage_path"])
-                    set_eastern_timestamp(abs_path, date_str)
-                    
-                    self.status["files_downloaded"] += 1
-                    self.log(f"Downloaded photo: {orig_filename}")
-                    
-                except Exception as item_err:
-                    self.log(f"Failed parsing item: {item_err}")
+            # Calculate 2-digit zero-padded sequence numbers per date ((01), (02), ...)
+            date_counters = {}
+            current_manifest = self.tenant_storage.load_manifest()
+            for m in current_manifest.values():
+                if m.get("child") == child_name and m.get("date"):
+                    d = m.get("date")
+                    date_counters[d] = date_counters.get(d, 0) + 1
+
+            for task in download_queue:
+                d = task["date_str"]
+                date_counters[d] = date_counters.get(d, 0) + 1
+                task["seq"] = date_counters[d]
+
+            self.log(f"Starting parallel download for {len(download_queue)} items in timeframe {tf_text}...")
+
+            # Concurrent Multi-Threaded Task Execution
+            def _download_task(task_info):
+                if self._cancelled:
+                    return False
+
+                o_id = task_info["obj_id"]
+                d_url = task_info["download_url"]
+                d_str = task_info["date_str"]
+                seq_num = task_info["seq"]
+                is_vid = task_info["is_video"]
+                comment_txt = task_info["comment"] or f"Bright Horizons photo for {child_name} on {d_str}"
+                
+                if d_url.startswith("/"):
+                    d_url = f"https://mybrightday.brighthorizons.com{d_url}"
+
+                req_headers = {
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                    "Referer": "https://mybrightday.brighthorizons.com/dashboard/parents.html"
+                }
+
+                file_bytes = None
+                mime_type = "video/mp4" if is_vid else "image/jpeg"
+
+                # Exponential backoff retries: 1s, 2s, 4s, 8s, 16s, 30s cap
+                backoff_delays = [1.0, 2.0, 4.0, 8.0, 16.0, 30.0]
+                for attempt in range(len(backoff_delays)):
+                    try:
+                        resp = requests.get(d_url, headers=req_headers, timeout=60)
+                        if resp.status_code == 200:
+                            body_content = resp.content
+                            try:
+                                json_data = json.loads(body_content.decode("utf-8"))
+                                if isinstance(json_data, dict) and "signed_url" in json_data:
+                                    s_url = json_data["signed_url"]
+                                    if json_data.get("mime_type"):
+                                        mime_type = json_data["mime_type"]
+                                    s_resp = requests.get(s_url, headers={"User-Agent": req_headers["User-Agent"]}, timeout=60)
+                                    if s_resp.status_code == 200:
+                                        file_bytes = s_resp.content
+                                        break
+                            except Exception:
+                                file_bytes = body_content
+                                h_ct = resp.headers.get("Content-Type", "")
+                                if h_ct and "text/html" not in h_ct:
+                                    mime_type = h_ct
+                                break
+                    except Exception as req_err:
+                        if attempt == len(backoff_delays) - 1:
+                            self.log(f"[Download Error] Failed obj_id {o_id[:8]} after {len(backoff_delays)} attempts: {req_err}")
+                        else:
+                            time.sleep(backoff_delays[attempt])
+
+                if not file_bytes:
+                    return False
+
+                # Detect true file extension via binary magic bytes inspection
+                ext = detect_extension(file_bytes, mime_type)
+                
+                # Zero-padded 2-digit sequence format: <Child Name> <YYYY-MM-DD> (01).<ext>
+                filename = f"{child_name} {d_str} ({seq_num:02d}).{ext}"
+
+                saved_entry = self.tenant_storage.add_media_entry(
+                    obj_id=o_id,
+                    child=child_name,
+                    date_str=d_str,
+                    original_filename=filename,
+                    comment=comment_txt,
+                    file_bytes=file_bytes,
+                    mime_type=mime_type
+                )
+
+                abs_path = os.path.join(self.tenant_storage.tenant_dir, saved_entry["storage_path"])
+                set_eastern_timestamp(abs_path, d_str)
+                
+                self.status["files_downloaded"] += 1
+                return True
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = [executor.submit(_download_task, task) for task in download_queue]
+                results = [f.result() for f in futures]
+
+            success_count = sum(1 for r in results if r)
+            self.log(f"Completed timeframe {tf_text}: {success_count}/{len(download_queue)} items successfully downloaded.")
 
     def scroll_and_load(self, page: Page):
         """Scrolls down the page until no new content is loaded to ensure all photos are rendered (ported from working main.py skill code)."""

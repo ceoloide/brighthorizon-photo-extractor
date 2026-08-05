@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+import threading
 import uuid
 from typing import Dict, Any, List, Optional, Tuple
 from backend.security import get_tenant_id, encrypt_json, decrypt_json, DATA_DIR
@@ -18,6 +19,7 @@ class TenantStorage:
         
         self.config_file = os.path.join(self.tenant_dir, "config.enc")
         self.manifest_file = os.path.join(self.tenant_dir, "manifest.enc")
+        self._lock = threading.Lock()
         
         self._ensure_dirs()
         
@@ -87,6 +89,84 @@ class TenantStorage:
     # --- Manifest & Media Management ---
     def load_manifest(self) -> Dict[str, Any]:
         """Loads the tenant's encrypted media manifest."""
+        with self._lock:
+            if os.path.exists(self.manifest_file):
+                try:
+                    with open(self.manifest_file, "r") as f:
+                        return decrypt_json(f.read())
+                except Exception as e:
+                    print(f"Error loading manifest for {self.tenant_id}: {e}")
+            return {}
+
+    def save_manifest(self, manifest: Dict[str, Any]):
+        """Saves tenant media manifest encrypted at rest."""
+        with self._lock:
+            encrypted_str = encrypt_json(manifest)
+            with open(self.manifest_file, "w") as f:
+                f.write(encrypted_str)
+
+    def add_media_entry(self, obj_id: str, child: str, date_str: str, original_filename: str, comment: str, file_bytes: bytes, mime_type: str) -> Dict[str, Any]:
+        """Saves media file to obfuscated storage path and updates encrypted manifest."""
+        with self._lock:
+            manifest = self._load_manifest_unlocked()
+            
+            # Check if obj_id already exists in manifest
+            for m_id, item in manifest.items():
+                if item.get("obj_id") == obj_id:
+                    # Update existing file content/metadata
+                    target_path = os.path.abspath(os.path.join(self.tenant_dir, item["storage_path"]))
+                    if not target_path.startswith(os.path.abspath(self.tenant_dir)):
+                        raise Exception("Security Error: Path traversal attempt detected")
+                    with open(target_path, "wb") as f:
+                        f.write(file_bytes)
+                    item["file_size"] = len(file_bytes)
+                    item["comment"] = comment
+                    self._save_manifest_unlocked(manifest)
+                    return item
+
+            # New entry
+            media_id = str(uuid.uuid4())
+            rel_storage_path = os.path.join("media", f"{media_id}.dat")
+            abs_storage_path = os.path.abspath(os.path.join(self.tenant_dir, rel_storage_path))
+            
+            if not abs_storage_path.startswith(os.path.abspath(self.tenant_dir)):
+                raise Exception("Security Error: Path traversal attempt detected")
+                
+            with open(abs_storage_path, "wb") as f:
+                f.write(file_bytes)
+
+            # Generate & save 400x400 square thumbnail
+            is_vid = mime_type.startswith("video") or original_filename.lower().endswith((".mp4", ".mov", ".avi", ".mkv", ".webm"))
+            rel_thumb_path = os.path.join("media", f"{media_id}_thumb.dat")
+            abs_thumb_path = os.path.abspath(os.path.join(self.tenant_dir, rel_thumb_path))
+            try:
+                from backend.thumbnail import generate_square_thumbnail
+                thumb_bytes = generate_square_thumbnail(file_bytes, is_video=is_vid)
+                if thumb_bytes:
+                    with open(abs_thumb_path, "wb") as tf:
+                        tf.write(thumb_bytes)
+            except Exception as e:
+                print(f"[Thumbnail Notice] Error generating thumbnail on save for {media_id}: {e}")
+                
+            entry = {
+                "media_id": media_id,
+                "obj_id": obj_id,
+                "child": child,
+                "date": date_str,
+                "year": int(date_str.split("-")[0]) if "-" in date_str else None,
+                "month": int(date_str.split("-")[1]) if "-" in date_str and len(date_str.split("-")) > 1 else None,
+                "original_filename": original_filename,
+                "comment": comment,
+                "mime_type": mime_type,
+                "file_size": len(file_bytes),
+                "storage_path": rel_storage_path,
+                "thumb_path": rel_thumb_path
+            }
+            manifest[media_id] = entry
+            self._save_manifest_unlocked(manifest)
+            return entry
+
+    def _load_manifest_unlocked(self) -> Dict[str, Any]:
         if os.path.exists(self.manifest_file):
             try:
                 with open(self.manifest_file, "r") as f:
@@ -95,72 +175,10 @@ class TenantStorage:
                 print(f"Error loading manifest for {self.tenant_id}: {e}")
         return {}
 
-    def save_manifest(self, manifest: Dict[str, Any]):
-        """Saves tenant media manifest encrypted at rest."""
+    def _save_manifest_unlocked(self, manifest: Dict[str, Any]):
         encrypted_str = encrypt_json(manifest)
         with open(self.manifest_file, "w") as f:
             f.write(encrypted_str)
-
-    def add_media_entry(self, obj_id: str, child: str, date_str: str, original_filename: str, comment: str, file_bytes: bytes, mime_type: str) -> Dict[str, Any]:
-        """Saves media file to obfuscated storage path and updates encrypted manifest."""
-        manifest = self.load_manifest()
-        
-        # Check if obj_id already exists in manifest
-        for m_id, item in manifest.items():
-            if item.get("obj_id") == obj_id:
-                # Update existing file content/metadata
-                target_path = os.path.abspath(os.path.join(self.tenant_dir, item["storage_path"]))
-                if not target_path.startswith(os.path.abspath(self.tenant_dir)):
-                    raise Exception("Security Error: Path traversal attempt detected")
-                with open(target_path, "wb") as f:
-                    f.write(file_bytes)
-                item["file_size"] = len(file_bytes)
-                item["comment"] = comment
-                self.save_manifest(manifest)
-                return item
-
-        # New entry
-        media_id = str(uuid.uuid4())
-        rel_storage_path = os.path.join("media", f"{media_id}.dat")
-        abs_storage_path = os.path.abspath(os.path.join(self.tenant_dir, rel_storage_path))
-        
-        if not abs_storage_path.startswith(os.path.abspath(self.tenant_dir)):
-            raise Exception("Security Error: Path traversal attempt detected")
-            
-        with open(abs_storage_path, "wb") as f:
-            f.write(file_bytes)
-
-        # Generate & save 400x400 square thumbnail
-        is_vid = mime_type.startswith("video") or original_filename.lower().endswith((".mp4", ".mov", ".avi", ".mkv", ".webm"))
-        rel_thumb_path = os.path.join("media", f"{media_id}_thumb.dat")
-        abs_thumb_path = os.path.abspath(os.path.join(self.tenant_dir, rel_thumb_path))
-        try:
-            from backend.thumbnail import generate_square_thumbnail
-            thumb_bytes = generate_square_thumbnail(file_bytes, is_video=is_vid)
-            if thumb_bytes:
-                with open(abs_thumb_path, "wb") as tf:
-                    tf.write(thumb_bytes)
-        except Exception as e:
-            print(f"[Thumbnail Notice] Error generating thumbnail on save for {media_id}: {e}")
-            
-        entry = {
-            "media_id": media_id,
-            "obj_id": obj_id,
-            "child": child,
-            "date": date_str,
-            "year": int(date_str.split("-")[0]) if "-" in date_str else None,
-            "month": int(date_str.split("-")[1]) if "-" in date_str and len(date_str.split("-")) > 1 else None,
-            "original_filename": original_filename,
-            "comment": comment,
-            "mime_type": mime_type,
-            "file_size": len(file_bytes),
-            "storage_path": rel_storage_path,
-            "thumb_path": rel_thumb_path
-        }
-        
-        manifest[media_id] = entry
-        self.save_manifest(manifest)
-        return entry
 
     def get_media_file_path(self, media_id: str) -> Optional[Tuple[str, str, str]]:
         """

@@ -192,3 +192,21 @@ def test_dismiss_cdk_overlays():
     mock_page = MagicMock()
     dismiss_cdk_overlays(mock_page)
     mock_page.keyboard.press.assert_called_once_with("Escape")
+
+
+def test_extract_obj_id_from_direct_gcs_photo_url():
+    gcs_photo_href = "https://storage.googleapis.com/mbd-attachments-prod/6a073ebd6be647694dacbdfb/main.jpg?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=foo"
+    obj_id, is_video, resolved_url = extract_obj_id_from_url_or_style(href=gcs_photo_href)
+    assert obj_id == "6a073ebd6be647694dacbdfb"
+    assert is_video is False
+    assert resolved_url == gcs_photo_href
+
+
+def test_extract_obj_id_from_direct_gcs_video_rel_url():
+    video_href = "#6a020ff419db06fe02ab35af-default"
+    gcs_video_rel = "https://storage.googleapis.com/mbd-attachments-prod/6a020ff419db06fe02ab35ae/main.mp4?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=foo"
+    obj_id, is_video, resolved_url = extract_obj_id_from_url_or_style(href=video_href, rel=gcs_video_rel)
+    assert obj_id == "6a020ff419db06fe02ab35ae"
+    assert is_video is True
+    assert resolved_url == gcs_video_rel
+
