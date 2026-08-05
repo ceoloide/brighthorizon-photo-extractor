@@ -19,7 +19,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# 1. System & Playwright dependencies (Cached layer - changes rarely)
+# 1. System & Playwright dependencies (Cached OS Layer)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
@@ -47,17 +47,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm /tmp/chrome.deb \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Python package dependencies (Cached layer)
+# 2. Python package dependencies (Cached Pip Layer)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     && playwright install chromium
 
-# 3. Fast-changing Application Source Code
-COPY backend/ ./backend/
-COPY main.py .
+# 3. Frontend Dist Bundle (Cached Frontend Layer)
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
+
+# 4. Application Source Code (Fast-changing App Layer - builds instantly)
+COPY backend/ ./backend/
+COPY version.json .
+COPY main.py .
 
 EXPOSE 8095
 VOLUME ["/app/data"]
 
 CMD ["uvicorn", "backend.server:app", "--host", "0.0.0.0", "--port", "8095"]
+
