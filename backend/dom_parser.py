@@ -356,7 +356,7 @@ def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 30
                                     ready_count += 1
                     
                     if ready_count >= p_count or (p_count > 0 and ready_count > 0 and (time.time() - start_time > 5.0)):
-                        log_fn(f"Timeframe month '{tf_text}': Discovered {p_count} total <li> cards ({ready_count} matching a.fancybox href / video targets).")
+                        log_fn(f"Timeframe month '{tf_text}' feed is ready: Discovered {p_count} total <li> cards ({ready_count} matching direct GCS signed URL targets).")
                         return True
             except Exception:
                 pass
@@ -374,6 +374,9 @@ def extract_feed_items(page: Page, timeframe_year: Optional[int] = None, logger:
 
     Returns list of dictionaries representing parsed feed items.
     """
+    if logger:
+        logger(f"Starting DOM feed item extraction for timeframe year {timeframe_year}...")
+
     items: List[Dict[str, Any]] = []
 
     # Rule 2.B: Scope search strictly inside left-panel timeline well
@@ -446,7 +449,7 @@ def extract_feed_items(page: Page, timeframe_year: Optional[int] = None, logger:
             continue
 
     if logger:
-        logger(f"Feed Item Parser: Found {total_lis} total <li> cards, {len(items)} with valid a.fancybox href / video targets.")
+        logger(f"DOM feed extraction finished: Discovered {total_lis} total <li> cards, extracted {len(items)} valid media items with direct GCS signed URL targets.")
 
     return items
 

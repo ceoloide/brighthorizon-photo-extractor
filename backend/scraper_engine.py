@@ -1511,6 +1511,8 @@ class ScraperJob:
                 file_bytes = None
                 mime_type = "video/mp4" if is_vid else "image/jpeg"
 
+                self.log(f"Fetching direct GCS asset for {child_name} {d_str} ({seq_num:02d}) [obj_id: {o_id[:8]}...]...")
+
                 # Exponential backoff retries: 1s, 2s, 4s, 8s, 16s, 30s cap
                 backoff_delays = [1.0, 2.0, 4.0, 8.0, 16.0, 30.0]
                 for attempt in range(len(backoff_delays)):
@@ -1563,6 +1565,7 @@ class ScraperJob:
                 set_eastern_timestamp(abs_path, d_str)
                 
                 self.status["files_downloaded"] += 1
+                self.log(f"Fetched direct GCS asset for {child_name} {d_str} ({seq_num:02d}) -> saved as '{filename}' ({len(file_bytes)} bytes).")
                 return True
 
             with ThreadPoolExecutor(max_workers=8) as executor:
