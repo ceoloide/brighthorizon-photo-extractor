@@ -586,7 +586,7 @@ def download_archive(request: Request, token: Optional[str] = None, authorizatio
         raise HTTPException(status_code=401, detail="Invalid token")
         
     tenant = TenantStorage(payload["email"])
-    status_info = get_archive_status(tenant.tenant_id)
+    status_info = get_archive_status(tenant.tenant_id, tenant_storage=tenant)
     
     if status_info["status"] != "ready" or not status_info.get("archive_id"):
         raise HTTPException(status_code=400, detail="Archive not ready for download. Please generate archive first.")

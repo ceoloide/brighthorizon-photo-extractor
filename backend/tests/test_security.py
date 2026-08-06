@@ -266,6 +266,23 @@ def test_archive_manifest_hash_up_to_date_detection():
     assert status_updated["status"] == "ready"
     assert status_updated["up_to_date"] is False
 
+def test_download_archive_persisted_disk_detection():
+    from backend.archive_stream import get_archive_status, _archive_tasks
+    from backend.database import TenantStorage
+    
+    storage = TenantStorage("persist_download_test@example.com")
+    os.makedirs(storage.archives_dir, exist_ok=True)
+    zip_path = os.path.join(storage.archives_dir, "archive_persist.zip")
+    with open(zip_path, "w") as f: f.write("content")
+    
+    # Ensure memory dict does not have tenant_id
+    _archive_tasks.pop(storage.tenant_id, None)
+    
+    # Passing tenant_storage=storage should return ready status with archive_id
+    status = get_archive_status(storage.tenant_id, tenant_storage=storage)
+    assert status["status"] == "ready"
+    assert status["archive_id"] == "archive_persist.zip"
+
 
 
 
