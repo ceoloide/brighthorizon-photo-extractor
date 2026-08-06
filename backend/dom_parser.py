@@ -273,25 +273,53 @@ def click_timeframe_tile(page: Page, tile_locator: Any) -> bool:
     Clicks the timeframe month tile adhering to Rule 2.A.
     Target MUST be inner 'div.tile.pointable' element holding 'click: select' binding.
 
-    Accepts either a Playwright Locator or a timeframe dict containing 'tile_locator'.
+    Accepts a Playwright Locator, a timeframe dict containing 'tile_locator', or a string (e.g. 'jun 2026').
     """
     try:
         target = tile_locator
+        if isinstance(tile_locator, str):
+            return page.evaluate("""
+                (text) => {
+                    const parts = text.trim().toLowerCase().split(/\\s+/);
+                    const mStr = parts[0] || '';
+                    const yStr = parts[1] || '';
+                    const lis = Array.from(document.querySelectorAll('li'));
+                    const el = lis.find(item => {
+                        const clean = (item.innerText || item.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                        return mStr && yStr ? (clean.includes(mStr) && clean.includes(yStr)) : clean === text.trim().toLowerCase();
+                    });
+                    if (el) {
+                        const tile = el.querySelector('div.tile') || el.querySelector('div') || el;
+                        tile.scrollIntoView({ block: 'center', inline: 'center' });
+                        if (window.jQuery) {
+                            try { window.jQuery(tile).trigger('click'); } catch(e){}
+                        }
+                        const evt = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+                        tile.dispatchEvent(evt);
+                        return true;
+                    }
+                    return false;
+                }
+            """, tile_locator)
+
         if isinstance(tile_locator, dict):
             target = tile_locator.get("tile_locator") or tile_locator.get("locator")
 
         if hasattr(target, "click"):
-            target.click()
+            try:
+                target.click(force=True)
+            except Exception:
+                target.evaluate("(el) => el.click()")
             return True
         return False
     except Exception:
         return False
 
 
-def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 300.0, max_retries: int = 2, logger=None) -> bool:
+def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 300.0, max_retries: int = 3, logger=None) -> bool:
     """
     Dynamically waits up to max_wait_sec for Knockout.js feed items or 'no events for the month' indicator.
-    Supports re-clicking the month tile up to max_retries times if loading stalls.
+    Supports re-clicking the month tile up to max_retries times ONLY if processing is not currently active.
     
     Returns True if month has events and media URLs are fully populated.
     Returns False if confirmed empty or timed out.
@@ -299,41 +327,26 @@ def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 30
     import time
     log_fn = logger if logger else print
 
-    js_click = """
-        (text) => {
-            const targetText = text.replace(/\\s+/g, ' ').trim().toLowerCase();
-            const lis = Array.from(document.querySelectorAll('li'));
-            const el = lis.find(item => {
-                const cleanItemText = (item.innerText || item.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-                return cleanItemText === targetText;
-            });
-            if (el) {
-                const tile = el.querySelector('div.tile') || el.querySelector('div') || el;
-                tile.scrollIntoView({ block: 'center', inline: 'center' });
-                if (window.jQuery) {
-                    try { window.jQuery(tile).trigger('click'); } catch(e){}
-                }
-                const evt = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
-                tile.dispatchEvent(evt);
-                return true;
-            }
-            return false;
-        }
-    """
+    start_time = time.time()
 
     for attempt in range(max_retries + 1):
         if attempt > 0:
-            log_fn(f"[Retry #{attempt}/{max_retries}] Re-clicking timeframe month tile '{tf_text}'...")
-            try:
-                page.evaluate(js_click, tf_text)
-            except Exception as e:
-                log_fn(f"Re-click tile exception: {e}")
+            # SAFETY: Check if Knockout is currently processing an AJAX request
+            is_busy = page.evaluate("() => !!document.querySelector('i.fa-spinner:not([style*=\"display: none\"])')")
+            if is_busy:
+                log_fn(f"[Retry #{attempt}/{max_retries}] Knockout is still loading AJAX response for '{tf_text}'... waiting instead of re-clicking.")
+            else:
+                log_fn(f"[Retry #{attempt}/{max_retries}] Re-clicking timeframe month tile '{tf_text}'...")
+                try:
+                    click_timeframe_tile(page, tf_text)
+                except Exception as e:
+                    log_fn(f"Re-click tile exception: {e}")
 
-        start_time = time.time()
-        # Small 800ms grace period to allow Knockout.js to trigger processing spinner & clear previous month cards
+        attempt_start = time.time()
         page.wait_for_timeout(800)
 
-        while time.time() - start_time < (max_wait_sec / (max_retries + 1)):
+        # Allow generous wait window (up to 25s per attempt) for heavy months (100+ images/videos)
+        while time.time() - attempt_start < 25.0:
             try:
                 empty_loc = page.locator("h1:has-text('no events for the month'), h1:has-text('welcome to tadpoles'), h1:has-text('no entries')").first
                 timeline = page.locator("div.well.left-panel.pull-left, div.well.pull-left, div.well")
@@ -341,7 +354,6 @@ def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 30
                 
                 # Check for empty month header
                 if empty_loc.count() > 0 and empty_loc.is_visible():
-                    # Wait 1.5s false-positive safety buffer to verify no post items arrive
                     page.wait_for_timeout(1500)
                     if posts_loc.count() == 0:
                         log_fn(f"Timeframe month '{tf_text}' confirmed empty ('no events for the month').")
@@ -350,10 +362,8 @@ def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 30
                 # Check for feed items
                 p_count = posts_loc.count()
                 if p_count > 0:
-                    # Check if Knockout is still in processing spinner state
                     is_processing = page.evaluate("() => !!document.querySelector('i.fa-spinner:not([style*=\"display: none\"])')")
-                    if not is_processing or (time.time() - start_time > 4.0):
-                        # Verify DOM readiness: ensure all items have populated URLs
+                    if not is_processing or (time.time() - start_time > 12.0):
                         ready_count = 0
                         lis = posts_loc.all()
                         for li in lis:
@@ -375,7 +385,7 @@ def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 30
             except Exception:
                 pass
             
-            page.wait_for_timeout(250)
+            page.wait_for_timeout(300)
 
     log_fn(f"Timed out waiting for timeframe month '{tf_text}' after {max_retries + 1} attempts.")
     return False
