@@ -1526,11 +1526,19 @@ class ScraperJob:
 
                 self.log(f"Fetching direct GCS asset for {child_name} {d_str} ({seq_num:02d}) [obj_id: {o_id[:8]}...]...")
 
+                fallback_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={o_id}&key={o_id}"
+
                 # Exponential backoff retries: 1s, 2s, 4s, 8s, 16s, 30s cap
                 backoff_delays = [1.0, 2.0, 4.0, 8.0, 16.0, 30.0]
                 for attempt, delay in enumerate(backoff_delays):
                     try:
-                        resp = requests.get(d_url, headers=req_headers, cookies=session_cookies, timeout=60)
+                        target_url = d_url if (attempt == 0 and d_url) else fallback_url
+                        resp = requests.get(target_url, headers=req_headers, cookies=session_cookies, timeout=60)
+                        if resp.status_code != 200 and target_url != fallback_url:
+                            self.log(f"[Download Notice] Primary URL HTTP {resp.status_code} for obj_id {o_id[:8]}. Requesting fresh signed URL from backend...")
+                            target_url = fallback_url
+                            resp = requests.get(target_url, headers=req_headers, cookies=session_cookies, timeout=60)
+
                         if resp.status_code != 200:
                             raise Exception(f"HTTP {resp.status_code} {resp.reason}")
 
