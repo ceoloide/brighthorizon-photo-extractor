@@ -327,6 +327,14 @@ def logout(request: Request, response: Response):
             # Pop any verification session state from memory
             _active_verifications.pop(tenant_id, None)
             
+            # Clear stored password so logging back in requires full verification
+            config = tenant_storage.load_config()
+            if "password" in config:
+                config.pop("password", None)
+                tenant_storage.save_config(config)
+                
+            tenant_storage.clear_session()
+            
     response.delete_cookie("bh_tenant_token")
     return {"status": "success", "message": "Signed out successfully."}
 

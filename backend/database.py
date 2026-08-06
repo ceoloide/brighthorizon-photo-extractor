@@ -57,6 +57,15 @@ class TenantStorage:
         self.clear_session()
         if os.path.exists(self.tenant_dir):
             try:
+                if os.path.exists(self.config_file):
+                    with open(self.config_file, "w") as f:
+                        f.write(encrypt_json({}))
+                if os.path.exists(self.manifest_file):
+                    with open(self.manifest_file, "w") as f:
+                        f.write(encrypt_json({}))
+            except Exception:
+                pass
+            try:
                 shutil.rmtree(self.tenant_dir, ignore_errors=True)
                 print(f"[TenantStorage] Successfully purged all data for tenant {self.tenant_id}")
             except Exception as e:
