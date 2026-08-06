@@ -75,7 +75,9 @@ def launch_stealth_persistent_context(playwright_instance, user_data_dir: str, e
     args = [
         "--disable-blink-features=AutomationControlled",
         "--no-sandbox",
+        "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
+        "--disable-gpu",
         "--window-size=1280,720",
         "--lang=en-US,en"
     ]

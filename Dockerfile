@@ -62,7 +62,7 @@ COPY backend/ ./backend/
 COPY version.json .
 COPY main.py .
 
-RUN mkdir -p /app/data && chown -R appuser:appgroup /app
+RUN mkdir -p /app/data /tmp/.X11-unix && chmod 777 /tmp /tmp/.X11-unix && chown -R appuser:appgroup /app
 
 USER appuser
 
