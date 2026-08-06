@@ -1526,7 +1526,8 @@ class ScraperJob:
 
                 self.log(f"Fetching direct GCS asset for {child_name} {d_str} ({seq_num:02d}) [obj_id: {o_id[:8]}...]...")
 
-                fallback_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={o_id}&key={o_id}"
+                k_id = task_info.get("key_id") or o_id
+                fallback_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={o_id}&key={k_id}"
 
                 # Exponential backoff retries: 1s, 2s, 4s, 8s, 16s, 30s cap
                 backoff_delays = [1.0, 2.0, 4.0, 8.0, 16.0, 30.0]

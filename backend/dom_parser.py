@@ -442,15 +442,20 @@ def extract_feed_items(page: Page, timeframe_year: Optional[int] = None, logger:
             if not obj_id:
                 continue
 
-            raw_date = card.get("rawDateText") or ""
-            date_str = parse_date_overlay(raw_date, timeframe_year=timeframe_year)
-            comment_text = card.get("commentText") or ""
+            m_key = re.search(r'key=([^&#"\'\)\s]+)', resolved_url) or re.search(r'key=([^&#"\'\)\s]+)', raw_href) or re.search(r'key=([^&#"\'\)\s]+)', rel_attr) or re.search(r'key=([^&#"\'\)\s]+)', style_attr)
+            key_id = m_key.group(1) if m_key else obj_id
 
             media_type = "video" if is_video else "photo"
-            download_url = resolved_url if resolved_url.startswith("http") else f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={obj_id}&key={obj_id}"
+            if resolved_url.startswith("http"):
+                download_url = resolved_url
+            elif resolved_url.startswith("/"):
+                download_url = f"https://mybrightday.brighthorizons.com{resolved_url}"
+            else:
+                download_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={obj_id}&key={key_id}"
 
             items.append({
                 "obj_id": obj_id,
+                "key_id": key_id,
                 "media_type": media_type,
                 "is_video": is_video,
                 "raw_href": raw_href,
@@ -520,11 +525,20 @@ def extract_feed_items(page: Page, timeframe_year: Optional[int] = None, logger:
             except Exception:
                 pass
 
+            m_key = re.search(r'key=([^&#"\'\)\s]+)', resolved_url) or re.search(r'key=([^&#"\'\)\s]+)', raw_href) or re.search(r'key=([^&#"\'\)\s]+)', rel_attr) or re.search(r'key=([^&#"\'\)\s]+)', style_attr)
+            key_id = m_key.group(1) if m_key else obj_id
+
             media_type = "video" if is_video else "photo"
-            download_url = resolved_url if resolved_url.startswith("http") else f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={obj_id}&key={obj_id}"
+            if resolved_url.startswith("http"):
+                download_url = resolved_url
+            elif resolved_url.startswith("/"):
+                download_url = f"https://mybrightday.brighthorizons.com{resolved_url}"
+            else:
+                download_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={obj_id}&key={key_id}"
 
             items.append({
                 "obj_id": obj_id,
+                "key_id": key_id,
                 "media_type": media_type,
                 "is_video": is_video,
                 "raw_href": raw_href,
