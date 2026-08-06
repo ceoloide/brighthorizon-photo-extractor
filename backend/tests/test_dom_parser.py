@@ -210,3 +210,49 @@ def test_extract_obj_id_from_direct_gcs_video_rel_url():
     assert is_video is True
     assert resolved_url == gcs_video_rel
 
+
+import pytest
+from backend.dom_parser import check_month_busy_state, wait_for_month_feed_ready
+
+def test_check_month_busy_state_mock():
+    mock_page = MagicMock()
+    mock_page.evaluate.return_value = True
+    assert check_month_busy_state(mock_page) is True
+
+    mock_page.evaluate.return_value = False
+    assert check_month_busy_state(mock_page) is False
+
+
+def test_wait_for_month_feed_ready_empty_month():
+    mock_page = MagicMock()
+    # 1st evaluate (busy check): returns False (not busy)
+    # 2nd evaluate (no events visible check): returns True (empty month confirmed)
+    mock_page.evaluate.side_effect = [False, True]
+
+    res = wait_for_month_feed_ready(mock_page, "jun 2026", max_wait_sec=5.0)
+    assert res is False
+    assert mock_page.wait_for_timeout.call_count >= 2  # initial 2.5s and post-busy 3.5s
+
+
+def test_wait_for_month_feed_ready_populated_month():
+    mock_page = MagicMock()
+    # 1st evaluate (busy check): False
+    # 2nd evaluate (no events check): False
+    # 3rd evaluate (feed readiness check): {totalCards: 3, readyCount: 3}
+    mock_page.evaluate.side_effect = [False, False, {"totalCards": 3, "readyCount": 3}]
+
+    res = wait_for_month_feed_ready(mock_page, "jun 2026", max_wait_sec=5.0)
+    assert res is True
+
+
+def test_wait_for_month_feed_ready_timeout_error():
+    mock_page = MagicMock()
+    mock_page.evaluate.return_value = True  # Always busy
+
+    with pytest.raises(TimeoutError) as exc_info:
+        wait_for_month_feed_ready(mock_page, "jun 2026", max_wait_sec=0.1)
+
+    assert "Max wait time" in str(exc_info.value)
+    assert "jun 2026" in str(exc_info.value)
+
+

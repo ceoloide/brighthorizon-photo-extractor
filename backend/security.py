@@ -11,7 +11,15 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 
-DATA_DIR = os.environ.get("DATA_DIR", "/app/data" if (os.path.exists("/app/data") and os.access("/app/data", os.W_OK)) else os.path.join(os.getcwd(), "data"))
+def get_data_dir() -> str:
+    env_dir = os.environ.get("DATA_DIR")
+    if env_dir:
+        return env_dir
+    if os.path.exists("/data") and os.access("/data", os.W_OK):
+        return "/data"
+    return os.path.join(os.getcwd(), "data")
+
+DATA_DIR = get_data_dir()
 SALT_FILE = os.path.join(DATA_DIR, "salt.bin")
 MASTER_SECRET_FILE = os.path.join(DATA_DIR, "master_secret.bin")
 
@@ -21,6 +29,19 @@ def get_or_create_salt() -> bytes:
     if os.path.exists(SALT_FILE):
         with open(SALT_FILE, "rb") as f:
             return f.read()
+    # Check alternate known persistent paths before generating new salt
+    alt_paths = ["/opt/data/bh-extractor/salt.bin", os.path.join(os.getcwd(), "data", "salt.bin")]
+    for alt_p in alt_paths:
+        if os.path.exists(alt_p):
+            try:
+                with open(alt_p, "rb") as f:
+                    content = f.read()
+                with open(SALT_FILE, "wb") as f_out:
+                    f_out.write(content)
+                return content
+            except Exception:
+                pass
+
     salt = os.urandom(32)
     with open(SALT_FILE, "wb") as f:
         f.write(salt)
@@ -36,6 +57,20 @@ def get_or_create_master_secret() -> bytes:
     if os.path.exists(MASTER_SECRET_FILE):
         with open(MASTER_SECRET_FILE, "rb") as f:
             return f.read()
+            
+    # Check alternate known persistent paths before generating new secret
+    alt_paths = ["/opt/data/bh-extractor/master_secret.bin", os.path.join(os.getcwd(), "data", "master_secret.bin")]
+    for alt_p in alt_paths:
+        if os.path.exists(alt_p):
+            try:
+                with open(alt_p, "rb") as f:
+                    content = f.read()
+                with open(MASTER_SECRET_FILE, "wb") as f_out:
+                    f_out.write(content)
+                return content
+            except Exception:
+                pass
+
     secret = os.urandom(64)
     with open(MASTER_SECRET_FILE, "wb") as f:
         f.write(secret)

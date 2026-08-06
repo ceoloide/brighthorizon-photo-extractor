@@ -476,12 +476,23 @@ def download_logs(tenant: TenantStorage = Depends(get_current_tenant)):
     )
 
 # --- Media Gallery & Direct File Streaming ---
+def _compare_media_items(a: dict, b: dict) -> int:
+    d1, d2 = a.get("date", ""), b.get("date", "")
+    if d1 != d2:
+        return 1 if d1 < d2 else -1
+    f1 = (a.get("original_filename") or a.get("filename") or "").lower()
+    f2 = (b.get("original_filename") or b.get("filename") or "").lower()
+    if f1 != f2:
+        return -1 if f1 < f2 else 1
+    return 0
+
 @app.get("/api/media")
 def list_media(tenant: TenantStorage = Depends(get_current_tenant)):
+    from functools import cmp_to_key
     manifest = tenant.load_manifest()
     items = list(manifest.values())
-    # Sort descending by date
-    items.sort(key=lambda x: x.get("date", ""), reverse=True)
+    # Sort descending by date, ascending by filename
+    items.sort(key=cmp_to_key(_compare_media_items))
     return {"status": "success", "count": len(items), "media": items}
 
 @app.get("/api/media/{media_id}")

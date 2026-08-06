@@ -1415,8 +1415,21 @@ class ScraperJob:
             # Dynamic Wait & Month Feed Readiness Verification
             tf_parts = tf_text.split()
             tf_year = int(tf_parts[1]) if len(tf_parts) == 2 and tf_parts[1].isdigit() else None
-            
-            has_feed = wait_for_month_feed_ready(page, tf_text, max_wait_sec=300.0, max_retries=2, logger=self.log)
+
+            has_feed = False
+            max_retries = 2
+            for attempt in range(max_retries + 1):
+                try:
+                    has_feed = wait_for_month_feed_ready(page, tf_text, max_wait_sec=300.0, logger=self.log)
+                    break
+                except TimeoutError as te:
+                    if attempt < max_retries:
+                        self.log(f"Timeframe month '{tf_text}' timed out in busy state. Re-clicking tile (attempt {attempt + 1}/{max_retries})...")
+                        click_timeframe_tile(page, tf_text)
+                    else:
+                        self.log(f"Timeframe month '{tf_text}' failed after {max_retries} retries: {te}")
+                        has_feed = False
+
             if not has_feed:
                 self.log(f"Skipping empty or unpopulated timeframe month '{tf_text}'.")
                 continue
@@ -1505,7 +1518,7 @@ class ScraperJob:
 
             self.log(f"Starting parallel download for {len(download_queue)} items in timeframe {tf_text}...")
 
-            # Concurrent Multi-Threaded Task Execution (max_workers=2 for stable connection management)
+            # Concurrent Multi-Threaded Task Execution (max_workers=32 for high throughput downloads)
             def _download_task(task_info):
                 if self._cancelled:
                     return False
@@ -1543,11 +1556,19 @@ class ScraperJob:
                 k_id = task_info.get("key_id") or o_id
                 fallback_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={o_id}&key={k_id}"
 
+                # Sanitize d_url: ensure primary media download never requests thumbnail assets
+                if d_url:
+                    if "thumbnail=" in d_url.lower():
+                        if "obj_attachment" in d_url:
+                            d_url = re.sub(r'[\?&]thumbnail=(true|false|1|0)', '', d_url, flags=re.IGNORECASE).replace("?&", "?").rstrip("?&")
+                        else:
+                            d_url = fallback_url
+
                 # Exponential backoff retries: 1s, 2s, 4s, 8s, 16s, 30s cap
                 backoff_delays = [1.0, 2.0, 4.0, 8.0, 16.0, 30.0]
                 for attempt, delay in enumerate(backoff_delays):
                     try:
-                        target_url = d_url if (attempt == 0 and d_url) else fallback_url
+                        target_url = d_url if (attempt == 0 and d_url and "thumbnail=" not in d_url.lower()) else fallback_url
                         resp = requests.get(target_url, headers=req_headers, cookies=session_cookies, timeout=60)
                         if resp.status_code != 200 and target_url != fallback_url:
                             self.log(f"[Download Notice] Primary URL HTTP {resp.status_code} for obj_id {o_id[:8]}. Requesting fresh signed URL from backend...")
@@ -1611,7 +1632,7 @@ class ScraperJob:
                 self.log(f"Fetched direct GCS asset for {child_name} {d_str} ({seq_num:02d}) -> saved as '{filename}' ({len(file_bytes)} bytes).")
                 return True
 
-            with ThreadPoolExecutor(max_workers=16) as executor:
+            with ThreadPoolExecutor(max_workers=32) as executor:
                 futures = [executor.submit(_download_task, task) for task in download_queue]
                 results = [f.result() for f in futures]
 

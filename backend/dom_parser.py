@@ -316,122 +316,192 @@ def click_timeframe_tile(page: Page, tile_locator: Any) -> bool:
         return False
 
 
-def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 360.0, max_retries: int = 2, logger=None) -> bool:
+def check_month_busy_state(page: Page) -> bool:
     """
-    Dynamically waits up to max_wait_sec (default 360s / 6m) for Knockout.js feed items or 'no events for the month' indicator.
-    Supports re-clicking the month tile if processing is stalled without spinner (after 22s) or as a hard backstop after 180s.
+    Evaluates whether the timeframe month is currently in Busy State.
     
-    Returns True if month has events and media URLs are fully populated.
-    Returns False if confirmed empty or timed out.
+    Busy State is True IF AND ONLY IF:
+    1) the div that has i.fa-spinner as an immediate child is NOT hidden
+       AND
+    2) the div that has h1.has-text('no events for the month') as an immediate child is hidden
+    """
+    return bool(page.evaluate("""
+        () => {
+            function isElementVisible(el) {
+                if (!el) return false;
+                return el.offsetParent !== null && 
+                       window.getComputedStyle(el).display !== 'none' && 
+                       window.getComputedStyle(el).visibility !== 'hidden';
+            }
+
+            // 1) The div that has i.fa-spinner as an immediate child is NOT hidden
+            const spinner = document.querySelector('i.fa-spinner');
+            let spinnerDivVisible = false;
+            if (spinner && spinner.parentElement && spinner.parentElement.tagName.toLowerCase() === 'div') {
+                spinnerDivVisible = isElementVisible(spinner.parentElement);
+            }
+
+            // 2) The div that has h1.has-text('no events for the month') as an immediate child is hidden
+            let noEventsDivHidden = true;
+            const h1s = Array.from(document.querySelectorAll('h1'));
+            for (const h1 of h1s) {
+                const txt = (h1.innerText || h1.textContent || '').toLowerCase();
+                if (txt.includes('no events for the month')) {
+                    if (h1.parentElement && h1.parentElement.tagName.toLowerCase() === 'div') {
+                        if (isElementVisible(h1.parentElement)) {
+                            noEventsDivHidden = false;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            return spinnerDivVisible && noEventsDivHidden;
+        }
+    """))
+
+
+def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 300.0, logger=None) -> bool:
+    """
+    Dynamically waits for Knockout.js feed items or 'no events for the month' indicator.
+    
+    Flow:
+    1. Initial 2.5s buffer to let the page settle after tile click.
+    2. Enters while loop checking Busy State until it becomes False or max_wait_sec is reached.
+       If max_wait_sec is reached while still busy, raises TimeoutError.
+    3. Exits loop and waits an additional 3.5s settling buffer to allow ul.thumbnails li or h1 elements to settle.
+    4. Checks if the div that has h1 containing 'no events for the month' as immediate child is visible.
+       - If visible -> returns False (month has no posts).
+       - Else -> polls/verifies feed card readiness and returns True.
     """
     import time
     log_fn = logger if logger else print
 
-    start_time = time.time()
-    last_reclick_time = start_time
-    last_log_time = start_time
+    log_fn(f"Waiting for timeframe month '{tf_text}' (initial 2.5s buffer)...")
+    page.wait_for_timeout(2500)  # Initial 2.5s settling buffer
 
+    start_time = time.time()
+    last_log_time = float('-inf')
+
+    is_busy = True
     while time.time() - start_time < max_wait_sec:
         elapsed = time.time() - start_time
-        
-        # Periodic progress logging every 6 seconds
+
         if time.time() - last_log_time >= 6.0:
-            is_busy = page.evaluate("""
-                () => {
-                    const sp = document.querySelector('i.fa-spinner');
-                    return sp ? (sp.offsetParent !== null && window.getComputedStyle(sp).display !== 'none' && window.getComputedStyle(sp.parentElement).display !== 'none') : false;
-                }
-            """)
-            log_fn(f"Waiting for Knockout feed '{tf_text}'... elapsed {elapsed:.1f}s (spinner active: {is_busy})")
+            log_fn(f"Waiting for Knockout feed '{tf_text}'... elapsed {elapsed:.1f}s (busy state active)")
             last_log_time = time.time()
 
         try:
-            # 1-batch JS evaluation for fast readiness check (<2ms)
-            status = page.evaluate("""
-                () => {
-                    const timeline = document.querySelector('div.well.left-panel.pull-left, div.well.pull-left') || 
-                                     Array.from(document.querySelectorAll('div.well')).find(el => !el.className.includes('pull-right')) || 
-                                     document.body;
-                    
-                    const headings = Array.from(timeline.querySelectorAll('h1, h2, h3, h4'));
-                    const isEmpty = headings.some(h => {
-                        const txt = (h.innerText || h.textContent || '').toLowerCase();
-                        return txt.includes('no events for the month');
-                    });
-                    
-                    const spinner = document.querySelector('i.fa-spinner');
-                    const isProcessing = spinner ? (spinner.offsetParent !== null && window.getComputedStyle(spinner).display !== 'none' && window.getComputedStyle(spinner.parentElement).display !== 'none') : false;
-                    
-                    // Filter out month navigation tiles (which have displayName bindings) to count only post cards
-                    const lis = Array.from(timeline.querySelectorAll('ul.thumbnails li')).filter(li => !li.querySelector('span[data-bind*="displayName"]'));
-                    
-                    let readyCount = 0;
-                    for (const li of lis) {
-                        const fancybox = li.querySelector('a.fancybox');
-                        const href = fancybox ? (fancybox.getAttribute('href') || '') : '';
-                        if (href.startsWith('http') || href.includes('obj_attachment')) {
-                            readyCount++;
-                        } else if (href.startsWith('#')) {
-                            const divId = href.replace(/^#/, '');
-                            let relDiv = null;
-                            try { relDiv = li.querySelector(`div#${CSS.escape(divId)}`); } catch(e){}
-                            if (!relDiv) relDiv = document.getElementById(divId);
-                            const relUrl = relDiv ? (relDiv.getAttribute('rel') || '') : '';
-                            if (relUrl && (relUrl.includes('http') || relUrl.includes('obj'))) {
-                                readyCount++;
-                            }
-                        }
-                    }
-                    
-                    return {
-                        isEmpty,
-                        isProcessing,
-                        totalCards: lis.length,
-                        readyCount
-                    };
-                }
-            """)
+            is_busy = check_month_busy_state(page)
+            if not is_busy:
+                break
+        except Exception as e:
+            log_fn(f"Error checking busy state for '{tf_text}': {e}")
 
-            # Check feed readiness
-            p_count = status["totalCards"]
-            ready_count = status["readyCount"]
-            is_processing = status["isProcessing"]
-
-            # 1. Check empty month state (empty text or 0 cards with inactive spinner)
-            if status["isEmpty"] or (not is_processing and p_count == 0 and elapsed > 3.5):
-                log_fn(f"Timeframe month '{tf_text}' confirmed empty (0 cards, spinner inactive).")
-                return False
-
-            # 2. Check feed readiness (cards populated and ready)
-            if p_count > 0:
-                if not is_processing or elapsed > 15.0:
-                    if ready_count >= p_count or (p_count > 0 and ready_count > 0 and elapsed > 4.0):
-                        log_fn(f"Timeframe month '{tf_text}' feed is ready in {elapsed:.1f}s: Discovered {p_count} total <li> cards ({ready_count} matching direct GCS signed URL targets).")
-                        return True
-
-            # Hard 180s Backstop: If loading is stuck for >= 180s (even with active spinner), force a backstop re-click
-            if (time.time() - last_reclick_time >= 180.0) and p_count == 0:
-                log_fn(f"[180s Backstop Triggered] Knockout AJAX request for '{tf_text}' has been stalled for {elapsed:.1f}s. Forcing tile re-click as a backstop...")
-                try:
-                    click_timeframe_tile(page, tf_text)
-                except Exception as e:
-                    log_fn(f"Backstop re-click exception: {e}")
-                last_reclick_time = time.time()
-            elif elapsed > 22.0 and (time.time() - last_reclick_time >= 22.0) and p_count == 0:
-                if not is_processing:
-                    log_fn(f"Loading stalled for '{tf_text}' after {elapsed:.1f}s (no spinner). Re-clicking timeframe tile...")
-                    try:
-                        click_timeframe_tile(page, tf_text)
-                    except Exception as e:
-                        log_fn(f"Re-click tile exception: {e}")
-                    last_reclick_time = time.time()
-        except Exception:
-            pass
-        
         page.wait_for_timeout(350)
 
-    log_fn(f"Timed out waiting for timeframe month '{tf_text}' after {max_wait_sec:.1f} seconds.")
-    return False
+    if is_busy:
+        err_msg = f"Max wait time ({max_wait_sec:.1f}s) reached waiting for timeframe month '{tf_text}' to finish busy state."
+        log_fn(err_msg)
+        raise TimeoutError(err_msg)
+
+    # Post-busy settling buffer: 3.5s
+    log_fn(f"Busy state cleared for '{tf_text}'. Waiting 3.5s settling buffer...")
+    page.wait_for_timeout(3500)
+
+    # Check if 'no events for the month' div is visible
+    is_no_events_visible = bool(page.evaluate("""
+        () => {
+            function isElementVisible(el) {
+                if (!el) return false;
+                return el.offsetParent !== null && 
+                       window.getComputedStyle(el).display !== 'none' && 
+                       window.getComputedStyle(el).visibility !== 'hidden';
+            }
+
+            const h1s = Array.from(document.querySelectorAll('h1'));
+            for (const h1 of h1s) {
+                const txt = (h1.innerText || h1.textContent || '').toLowerCase();
+                if (txt.includes('no events for the month')) {
+                    if (h1.parentElement && h1.parentElement.tagName.toLowerCase() === 'div') {
+                        if (isElementVisible(h1.parentElement)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+    """))
+
+    if is_no_events_visible:
+        log_fn(f"Timeframe month '{tf_text}' confirmed empty ('no events for the month' div is visible).")
+        return False
+
+    # Otherwise, month has posts. Verify feed card readiness (ul.thumbnails li)
+    log_fn(f"Timeframe month '{tf_text}' has posts. Verifying feed card readiness...")
+
+    # Wait up to 10s for thumbnail card links to populate ready GCS / attachment URLs
+    readiness_start = time.time()
+    while time.time() - readiness_start < 10.0:
+        status = page.evaluate("""
+            () => {
+                const timeline = document.querySelector('div.well.left-panel.pull-left, div.well.pull-left') || 
+                                 Array.from(document.querySelectorAll('div.well')).find(el => !el.className.includes('pull-right')) || 
+                                 document.body;
+
+                const lis = Array.from(timeline.querySelectorAll('ul.thumbnails li')).filter(li => !li.querySelector('span[data-bind*="displayName"]'));
+
+                let readyCount = 0;
+                for (const li of lis) {
+                    const fancybox = li.querySelector('a.fancybox');
+                    const href = fancybox ? (fancybox.getAttribute('href') || '') : '';
+                    if (href.startsWith('http') || href.includes('obj_attachment')) {
+                        readyCount++;
+                    } else if (href.startsWith('#')) {
+                        const divId = href.replace(/^#/, '');
+                        let relDiv = null;
+                        try { relDiv = li.querySelector(`div#${CSS.escape(divId)}`); } catch(e){}
+                        if (!relDiv) relDiv = document.getElementById(divId);
+                        const relUrl = relDiv ? (relDiv.getAttribute('rel') || '') : '';
+                        if (relUrl && (relUrl.includes('http') || relUrl.includes('obj'))) {
+                            readyCount++;
+                        }
+                    }
+                }
+                return { totalCards: lis.length, readyCount };
+            }
+        """)
+
+        p_count = status.get("totalCards", 0)
+        ready_count = status.get("readyCount", 0)
+
+        if p_count > 0 and (ready_count >= p_count or ready_count > 0):
+            log_fn(f"Timeframe month '{tf_text}' feed is ready: Discovered {p_count} cards ({ready_count} matching media targets).")
+            return True
+
+        page.wait_for_timeout(500)
+
+    log_fn(f"Timeframe month '{tf_text}' feed readiness check completed.")
+    return True
+
+
+def clean_full_res_url(url: str, obj_id: str, key_id: str) -> str:
+    """
+    Sanitizes primary download URLs to ensure they never request thumbnail assets.
+    Strips 'thumbnail=true' / 'thumbnail=1' query parameters from portal endpoints,
+    or falls back to the full-resolution portal endpoint for GCS thumbnail URLs.
+    """
+    fallback = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={obj_id}&key={key_id}"
+    if not url:
+        return fallback
+    
+    if "thumbnail=" in url.lower():
+        if "obj_attachment" in url:
+            cleaned = re.sub(r'[\?&]thumbnail=(true|false|1|0)', '', url, flags=re.IGNORECASE)
+            return cleaned.replace("?&", "?").rstrip("?&")
+        return fallback
+    return url
 
 
 def extract_feed_items(page: Page, timeframe_year: Optional[int] = None, logger: Optional[Callable[[str], None]] = None) -> List[Dict[str, Any]]:
@@ -514,11 +584,13 @@ def extract_feed_items(page: Page, timeframe_year: Optional[int] = None, logger:
 
             media_type = "video" if is_video else "photo"
             if resolved_url.startswith("http"):
-                download_url = resolved_url
+                raw_url = resolved_url
             elif resolved_url.startswith("/"):
-                download_url = f"https://mybrightday.brighthorizons.com{resolved_url}"
+                raw_url = f"https://mybrightday.brighthorizons.com{resolved_url}"
             else:
-                download_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={obj_id}&key={key_id}"
+                raw_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={obj_id}&key={key_id}"
+
+            download_url = clean_full_res_url(raw_url, obj_id, key_id)
 
             items.append({
                 "obj_id": obj_id,
