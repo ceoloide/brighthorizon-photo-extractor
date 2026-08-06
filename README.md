@@ -1,125 +1,102 @@
 # Bright Horizon Photo Extractor
 
-This script downloads and organizes children's pictures from the Bright Horizons web portal.
-
-## How it Works
-1. **Persistent Browser Session:** It uses Playwright with a persistent browser profile (`./user_data`). This means you only need to log in **once**. The script will automatically remember your session for subsequent runs.
-2. **Infinite Scroll Scraper:** It navigates to each child's dashboard, scrolls to load all historical photo posts, and scans the page DOM.
-3. **Date Detection:** It extracts the date of each post (e.g. "Today", "June 22, 2026", "22/06/2026") and uses that to name the files: `[ChildName] [YYYY-MM-DD] ([Index]).[extension]`.
-4. **Duplicate Prevention:** It maintains a `./downloads/manifest.json` file. Subsequent runs check this manifest and skip downloading photos that have already been retrieved, making sync runs extremely fast.
-5. **Metadata Adjustment:** It changes the downloaded image file's modification and access timestamps on your filesystem to 10:00 AM on the day the photo was posted.
+A modern, multi-tenant web application and background scraper engine that extracts, decrypts, and organizes children's photo and video memories from the Bright Horizons parent portal.
 
 ---
 
-## Setup Instructions
+## 🌟 Key Features
 
-This project uses the modern, ultra-fast Python package manager **`uv`**. By using `uv`, you do not need to manually install Python, configure virtual environments, or run `pip install`—everything is handled automatically via inline dependency metadata.
+- **🌐 Modern Multi-Tenant Web Interface**: Sleek React + Vite frontend with real-time extraction progress, media gallery filtering, and inline video playback.
+- **🔒 Encrypted Multi-Tenant Storage**: Tenant isolation with AES-256-GCM encrypted media state (`manifest.enc`) and PBKDF2-HMAC-SHA256 key derivation (`master_secret.bin` & `salt.bin`).
+- **🤖 Headless Automation & MFA Verification**: Interactive web-based Multi-Factor Authentication (MFA) verification flow with volatile memory zero-disk clearing.
+- **⚡ High-Performance Scraper Engine**: Parallel asset download pool with intelligent DOM timeframe ready state detection (`wait_for_month_feed_ready`).
+- **🗄️ Single ZIP Archive Center**: Asynchronous ZIP archive builder with SHA-256 manifest content change hashing (automatically disables re-generation when up to date).
+- **📡 Resumable Download Streaming**: Full HTTP Range request compliance (`HTTP 206 Partial Content`) for low-memory, pause/resume multi-gigabyte ZIP downloads.
+- **🏷️ Automated Metadata Injection**: EXIF comment embedding in JPEGs and pure-Python `tEXt` chunk injection in PNGs, with file modification times aligned to 10:00 AM Eastern Time (EST/EDT).
 
-### 1. Install `uv`
-Open your Terminal and run the installer:
+---
 
-* **macOS / Linux:**
-  ```bash
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  ```
-  *(Or use Homebrew: `brew install uv`)*
+## 🛠️ Architecture Overview
 
-* **Windows:**
-  ```powershell
-  powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
-  ```
+```text
+📁 Repository Layout
+├── backend/
+│   ├── server.py              # FastAPI REST API (Auth, Media, Extraction, Archives)
+│   ├── scraper_engine.py      # Playwright Scraper Job Queue & Worker Threading
+│   ├── dom_parser.py          # Portal DOM Selectors, Timeframe Ready Checks & Link Sanitizer
+│   ├── database.py            # TenantStorage Isolation & Encrypted Manifest Management
+│   ├── security.py            # AES-GCM Key Derivation, JWT Auth & Secret Preservation
+│   ├── archive_stream.py      # Asynchronous ZIP Generation & HTTP Range Streamer
+│   └── thumbnail.py          # Photo & Video Frame Square Thumbnail Generator
+├── frontend/
+│   ├── src/components/       # React Views (Login, MFA Verification, Gallery, ArchiveManager)
+│   └── package.json           # Frontend UI Dependencies & Build Metadata
+├── scripts/
+│   ├── bump_version.py        # Automated Version & Git Commit Hash Counter
+│   └── verify_deployment.py   # Live Deployment HTTP Health Checker
+├── docker-compose.yml         # Container Orchestration Spec (App + FlareSolverr)
+└── Dockerfile                 # Multi-Stage Node + Python Production Container Build
+```
 
-### 2. Install Playwright Browser Dependencies
-Run this single command to download Playwright's Chromium browser dependency:
+---
+
+## 🚀 Quick Start (Local Development)
+
+### 1. Requirements & Prerequisites
+- Python 3.11+
+- Node.js 20+
+- [`uv`](https://astral.sh/uv) package manager
+
+### 2. Running Locally with `uv`
+
+Install dependencies and start the backend FastAPI server:
 ```bash
+# Install Playwright browser dependencies
 uv run playwright install chromium
+
+# Launch the FastAPI backend server (http://localhost:8000)
+uv run uvicorn main:app --reload --port 8000
+```
+
+Start the React development server:
+```bash
+cd frontend
+npm install
+npm run dev
 ```
 
 ---
 
-## Running the Extractor
+## 🐳 Docker Deployment
 
-You do not need to activate any virtual environment. Simply use `uv run` to execute the script. The script supports two folder layout modes:
-* **Flat Mode (`--flat`, Default):** Saves all files directly under `downloads/[ChildName]/[filename]`.
-* **Nested Mode (`--nest`):** Saves files in subfolders by year and month: `downloads/[ChildName]/[YYYY]/[MM]/[filename]`.
+The application is deployed as a production Docker container behind FlareSolverr.
 
-> [!IMPORTANT]
-> **Automatic Reorganization:** If you switch layout modes (e.g., from flat to nested), the script will automatically detect the change and reorganize all existing files on disk to match the selected layout *before* checking for duplicates or starting downloads.
+### 1. Build and Launch Containers
+```bash
+# Bump semantic versioning tag
+python3 scripts/bump_version.py
 
-### Sync Modes
+# Build and start container services in background
+docker compose build && docker compose up -d
+```
 
-1. **Incremental Sync (Default Mode)**
-   Optimized for quick daily or weekly updates. It checks the feed from the latest month backwards, stopping as soon as it encounters a photo or video that has already been downloaded:
-   * Flat structure (Default):
-     ```bash
-     uv run main.py
-     ```
-   * Nested structure:
-     ```bash
-     uv run main.py --nest
-     ```
-
-2. **Full Verification Sync (Verification Mode)**
-   Performs a complete sweep of all historical months in the portal, verifying that every photo/video has been downloaded properly and re-downloading any failed files:
-   * Flat structure (Default):
-     ```bash
-     uv run main.py --full
-     ```
-   * Nested structure:
-     ```bash
-     uv run main.py --full --nest
-     ```
-
-### Post-Processing & Offline Verification
-To run an offline check of your downloaded files, set file system timestamps to exactly 10:00 AM New York local time, and inject comments into EXIF (JPEGs) and `tEXt` chunks (PNGs):
-* Flat structure (Default):
-  ```bash
-  uv run main.py --verify
-  ```
-* Nested structure:
-  ```bash
-  uv run main.py --verify --nest
-  ```
-
-### Initial Run (Login Required)
-1. When you run the script for the first time, a Chromium browser window will open.
-2. The browser will load the Bright Horizons home page.
-3. **Action:** Log in with your credentials. Perform any required multi-factor authentication (MFA/SSO).
-4. Once you log in successfully, the script will detect you've logged in, save the session cookies to `./user_data`, and start downloading photos.
-
-### Subsequent Runs
-The next time you run `uv run main.py`, the script will reuse the saved session. If your session is still valid, it will scrape, download new photos, and close automatically. *If your session expires in the future, the browser will simply display the login screen again for you to re-authenticate once.*
+### 2. Verify Live Deployment
+```bash
+python3 scripts/verify_deployment.py https://bears.ceoloide.com
+```
 
 ---
 
-## Output Structure
+## 🧪 Running Unit Tests
 
-Based on your selected layout mode:
+The backend test suite includes 170+ unit and integration tests covering DOM parsing, security isolation, pipeline stress, multi-tenant manifest concurrency, and archive creation:
 
-### Flat Layout (Default)
-```text
-downloads/
-├── manifest.json            # Keeps track of downloaded image IDs to prevent duplicates
-├── Child1/
-│   ├── Child1 2026-06-22 (1).jpg
-│   └── Child1 2026-06-21 (1).jpg
-└── Child2/
-    ├── Child2 2026-06-22 (1).jpg
-    ├── Child2 2026-06-22 (2).jpg  # Handles multiple images on the same day
-    └── Child2 2026-06-20 (1).jpg
+```bash
+uv run pytest backend/tests/
 ```
 
-### Nested Layout (`--nest`)
-```text
-downloads/
-├── manifest.json
-├── Child1/
-│   └── 2026/
-│       └── 06/
-│           └── Child1 2026-06-22 (1).png
-└── Child2/
-    └── 2026/
-        └── 06/
-            ├── Child2 2026-06-22 (1).png
-            └── Child2 2026-06-22 (2).png
-```
+---
+
+## 📄 License & Versioning
+
+All rights reserved. Adheres to Semantic Versioning (`vX.Y.Z-b<BUILD>`).
