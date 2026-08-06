@@ -212,6 +212,22 @@ def test_single_archive_per_tenant_purging():
     remaining = os.listdir(storage.archives_dir)
     assert len(remaining) == 0
 
+def test_cancel_archive_task_on_account_deletion():
+    from backend.archive_stream import cancel_archive_task, start_zip_task, get_archive_status
+    from backend.database import TenantStorage
+    
+    storage = TenantStorage("cancel_archive_test@example.com")
+    task_info = start_zip_task(storage)
+    
+    assert task_info["status"] in ["processing", "ready", "error"]
+    
+    # Cancel task on account deletion
+    cancel_archive_task(storage.tenant_id)
+    
+    status_after = get_archive_status(storage.tenant_id)
+    assert status_after["status"] == "idle"
+    assert status_after["archive_id"] is None
+
 
 
 

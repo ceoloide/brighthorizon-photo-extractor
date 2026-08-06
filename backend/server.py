@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from backend.security import verify_jwt_token, create_jwt_token, get_tenant_id
 from backend.database import TenantStorage
 from backend.scraper_engine import ScraperJob, redownload_single_media_item
-from backend.archive_stream import start_zip_task, get_archive_status, range_stream_response
+from backend.archive_stream import start_zip_task, get_archive_status, range_stream_response, cancel_archive_task
 
 app = FastAPI(title="Bright Horizons Photo Extractor API", version="2.0.0")
 
@@ -364,6 +364,9 @@ def delete_account(tenant: TenantStorage = Depends(get_current_tenant)):
         if job:
             job.status["state"] = "failed"
             job.status["error"] = "Account deleted"
+
+    # Cancel any active archive creation task & clear memory state
+    cancel_archive_task(tenant_id)
 
     # Pop any verification session state from memory
     _active_verifications.pop(tenant_id, None)

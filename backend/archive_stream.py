@@ -33,6 +33,15 @@ def purge_previous_archives(archives_dir: str):
                 except Exception as e:
                     print(f"[Archive Purge Error] Failed to remove previous archive {fpath}: {e}")
 
+def cancel_archive_task(tenant_id: str):
+    """Cancels and purges any active or completed archive creation task for a tenant."""
+    if tenant_id in _archive_tasks:
+        task_info = _archive_tasks.pop(tenant_id, None)
+        if task_info:
+            task_info["cancelled"] = True
+            task_info["status"] = "cancelled"
+            task_info["error"] = "Account deleted"
+
 def start_zip_task(tenant_storage: TenantStorage, layout: str = "flat") -> Dict[str, Any]:
     """Kicks off an asynchronous ZIP archive creation task in a background thread."""
     tenant_id = tenant_storage.tenant_id
@@ -50,6 +59,7 @@ def start_zip_task(tenant_storage: TenantStorage, layout: str = "flat") -> Dict[
         "archive_id": f"archive_{int(time.time())}.zip",
         "file_size": 0,
         "created_at": int(time.time()),
+        "cancelled": False,
         "error": None
     }
     _archive_tasks[tenant_id] = task_info
@@ -71,6 +81,10 @@ def start_zip_task(tenant_storage: TenantStorage, layout: str = "flat") -> Dict[
                 tenant_dir_abs = os.path.abspath(tenant_storage.tenant_dir)
                 
                 for media_id, item in manifest.items():
+                    if task_info.get("cancelled"):
+                        print(f"[Archive Worker] Task cancelled for tenant {tenant_id}. Aborting ZIP creation.")
+                        break
+
                     rel_path = item["storage_path"]
                     abs_src = os.path.abspath(os.path.join(tenant_storage.tenant_dir, rel_path))
                     
@@ -100,13 +114,20 @@ def start_zip_task(tenant_storage: TenantStorage, layout: str = "flat") -> Dict[
                     
                     processed += 1
                     task_info["progress_percent"] = round((processed / total_files) * 100.0, 1)
+
+            if task_info.get("cancelled"):
+                if os.path.exists(target_zip_path):
+                    try: os.remove(target_zip_path)
+                    except Exception: pass
+                return
             
             task_info["status"] = "ready"
             task_info["file_size"] = os.path.getsize(target_zip_path)
             task_info["progress_percent"] = 100.0
         except Exception as e:
-            task_info["status"] = "error"
-            task_info["error"] = str(e)
+            if not task_info.get("cancelled"):
+                task_info["status"] = "error"
+                task_info["error"] = str(e)
             
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
