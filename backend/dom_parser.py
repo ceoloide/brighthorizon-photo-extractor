@@ -336,7 +336,12 @@ def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 36
         
         # Periodic progress logging every 6 seconds
         if time.time() - last_log_time >= 6.0:
-            is_busy = page.evaluate("() => !!document.querySelector('i.fa-spinner:not([style*=\"display: none\"])')")
+            is_busy = page.evaluate("""
+                () => {
+                    const sp = document.querySelector('i.fa-spinner');
+                    return sp ? (sp.offsetParent !== null && window.getComputedStyle(sp).display !== 'none' && window.getComputedStyle(sp.parentElement).display !== 'none') : false;
+                }
+            """)
             log_fn(f"Waiting for Knockout feed '{tf_text}'... elapsed {elapsed:.1f}s (spinner active: {is_busy})")
             last_log_time = time.time()
 
@@ -349,7 +354,7 @@ def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 36
                     const isEmpty = emptyText.includes('no events for the month') || emptyText.includes('welcome to tadpoles') || emptyText.includes('no entries');
                     
                     const spinner = document.querySelector('i.fa-spinner');
-                    const isProcessing = spinner ? (spinner.offsetWidth > 0 && spinner.offsetHeight > 0 && window.getComputedStyle(spinner).display !== 'none') : false;
+                    const isProcessing = spinner ? (spinner.offsetParent !== null && window.getComputedStyle(spinner).display !== 'none' && window.getComputedStyle(spinner.parentElement).display !== 'none') : false;
                     
                     const timeline = document.querySelector('div.well.left-panel.pull-left, div.well.pull-left, div.well') || document.body;
                     const lis = Array.from(timeline.querySelectorAll('ul.thumbnails li'));
