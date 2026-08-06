@@ -1601,7 +1601,7 @@ class ScraperJob:
                 self.log(f"Fetched direct GCS asset for {child_name} {d_str} ({seq_num:02d}) -> saved as '{filename}' ({len(file_bytes)} bytes).")
                 return True
 
-            with ThreadPoolExecutor(max_workers=8) as executor:
+            with ThreadPoolExecutor(max_workers=16) as executor:
                 futures = [executor.submit(_download_task, task) for task in download_queue]
                 results = [f.result() for f in futures]
 
