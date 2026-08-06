@@ -369,7 +369,7 @@ def get_me(request: Request, authorization: Optional[str] = Header(None)):
     }
 
 @app.delete("/api/auth/delete-account")
-def delete_account(tenant: TenantStorage = Depends(get_current_tenant)):
+def delete_account(response: Response, tenant: TenantStorage = Depends(get_current_tenant)):
     tenant_id = tenant.tenant_id
     
     # Terminate active job if running
@@ -387,6 +387,8 @@ def delete_account(tenant: TenantStorage = Depends(get_current_tenant)):
             
     # Purge all media, user_data, encrypted manifests, and archives from disk
     tenant.purge_all_data()
+    
+    response.delete_cookie("bh_tenant_token")
     
     return {
         "status": "success",
