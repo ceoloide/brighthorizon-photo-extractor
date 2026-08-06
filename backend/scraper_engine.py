@@ -1511,6 +1511,16 @@ class ScraperJob:
                     "Referer": "https://mybrightday.brighthorizons.com/dashboard/parents.html"
                 }
 
+                session_cookies = {}
+                try:
+                    state_path = os.path.join(self.tenant_storage.tenant_dir, "user_data", "storage_state.json")
+                    if os.path.exists(state_path):
+                        with open(state_path, "r", encoding="utf-8") as sf:
+                            st = json.load(sf)
+                            session_cookies = {c["name"]: c["value"] for c in st.get("cookies", [])}
+                except Exception:
+                    pass
+
                 file_bytes = None
                 mime_type = "video/mp4" if is_vid else "image/jpeg"
 
@@ -1520,7 +1530,7 @@ class ScraperJob:
                 backoff_delays = [1.0, 2.0, 4.0, 8.0, 16.0, 30.0]
                 for attempt, delay in enumerate(backoff_delays):
                     try:
-                        resp = requests.get(d_url, headers=req_headers, timeout=60)
+                        resp = requests.get(d_url, headers=req_headers, cookies=session_cookies, timeout=60)
                         if resp.status_code != 200:
                             raise Exception(f"HTTP {resp.status_code} {resp.reason}")
 
