@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Play, RefreshCw, LogOut, CheckCircle2, AlertTriangle, Terminal, Camera, Shield, FileSpreadsheet, FolderTree, Trash2, AlertCircle, Copy, Check, Monitor } from 'lucide-react';
+import { Play, RefreshCw, LogOut, CheckCircle2, AlertTriangle, Terminal, Camera, Shield, FileSpreadsheet, FolderTree, Trash2, AlertCircle, Copy, Check, Monitor, Download } from 'lucide-react';
 import { Gallery } from './Gallery';
 import { ArchiveManager } from './ArchiveManager';
 
@@ -54,6 +54,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
     }
     setCopiedLogs(true);
     setTimeout(() => setCopiedLogs(false), 2000);
+  };
+
+  const handleDownloadLogs = () => {
+    const link = document.createElement('a');
+    link.href = `/api/logs/download?token=${encodeURIComponent(token)}`;
+    link.download = `extraction_log.log`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const handleReauthenticateNow = async () => {
@@ -578,23 +587,33 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
                   </div>
 
                   {showLogs && status.logs && status.logs.length > 0 && (
-                    <button
-                      onClick={handleCopyLogs}
-                      className="text-[11px] text-slate-500 hover:text-indigo-600 flex items-center gap-1 font-mono bg-white hover:bg-slate-100 border border-slate-200 px-2 py-1 rounded-lg transition"
-                      title="Copy visible console log content to clipboard"
-                    >
-                      {copiedLogs ? (
-                        <>
-                          <Check className="w-3 h-3 text-emerald-600" />
-                          <span className="text-emerald-600 font-semibold">Copied!</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-3 h-3 text-slate-500" />
-                          <span>Copy Logs</span>
-                        </>
-                      )}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={handleCopyLogs}
+                        className="text-[11px] text-slate-500 hover:text-indigo-600 flex items-center gap-1 font-mono bg-white hover:bg-slate-100 border border-slate-200 px-2 py-1 rounded-lg transition"
+                        title="Copy visible console log content to clipboard"
+                      >
+                        {copiedLogs ? (
+                          <>
+                            <Check className="w-3 h-3 text-emerald-600" />
+                            <span className="text-emerald-600 font-semibold">Copied!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3 text-slate-500" />
+                            <span>Copy Logs</span>
+                          </>
+                        )}
+                      </button>
+                      <button
+                        onClick={handleDownloadLogs}
+                        className="text-[11px] text-slate-500 hover:text-indigo-600 flex items-center gap-1 font-mono bg-white hover:bg-slate-100 border border-slate-200 px-2 py-1 rounded-lg transition"
+                        title="Download full un-truncated persistent log file from disk"
+                      >
+                        <Download className="w-3 h-3 text-slate-500" />
+                        <span>Download Full Log</span>
+                      </button>
+                    </div>
                   )}
                 </div>
 

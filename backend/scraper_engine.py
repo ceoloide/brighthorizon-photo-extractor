@@ -247,6 +247,7 @@ class ScraperJob:
             "screenshot": None,
             "logs": []
         }
+        self.tenant_storage.clear_log()
         self._mfa_code: Optional[str] = None
         self._mfa_event = threading.Event()
         self._active_page: Optional[Page] = None
@@ -292,14 +293,16 @@ class ScraperJob:
             pass
 
     def log_structured(self, level: str, category: str, message: str, details: Optional[Dict[str, Any]] = None):
-        """Structured logging method storing log messages and calling log_callback."""
+        """Structured logging method storing log messages, appending to persistent disk log, and calling log_callback."""
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         entry_str = f"[{timestamp}] [{level}] [{category}] {message}"
         
         self.status["logs"].append(entry_str)
-        if len(self.status["logs"]) > 300:
+        if len(self.status["logs"]) > 5000:
             self.status["logs"].pop(0)
             
+        self.tenant_storage.append_log(entry_str)
+
         if self.log_callback:
             self.log_callback(entry_str)
 

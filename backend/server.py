@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional
 from urllib.parse import quote
 from fastapi import FastAPI, Depends, HTTPException, Header, Request, status, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -463,6 +463,17 @@ def extraction_status(tenant: TenantStorage = Depends(get_current_tenant)):
         "error": None,
         "logs": []
     }
+
+@app.get("/api/logs/download")
+def download_logs(tenant: TenantStorage = Depends(get_current_tenant)):
+    log_file = tenant.latest_log_file
+    if not os.path.exists(log_file):
+        return PlainTextResponse("No extraction log history available.", status_code=404)
+    return FileResponse(
+        log_file,
+        media_type="text/plain",
+        filename=f"extraction_log_{tenant.tenant_id[:8]}.log"
+    )
 
 # --- Media Gallery & Direct File Streaming ---
 @app.get("/api/media")

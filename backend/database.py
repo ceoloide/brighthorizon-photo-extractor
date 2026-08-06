@@ -16,6 +16,8 @@ class TenantStorage:
         self.media_dir = os.path.join(self.tenant_dir, "media")
         self.archives_dir = os.path.join(self.tenant_dir, "archives")
         self.user_data_dir = os.path.join(self.tenant_dir, "user_data")
+        self.logs_dir = os.path.join(self.tenant_dir, "logs")
+        self.latest_log_file = os.path.join(self.logs_dir, "extraction.log")
         
         self.config_file = os.path.join(self.tenant_dir, "config.enc")
         self.manifest_file = os.path.join(self.tenant_dir, "manifest.enc")
@@ -28,6 +30,26 @@ class TenantStorage:
         os.makedirs(self.media_dir, exist_ok=True)
         os.makedirs(self.archives_dir, exist_ok=True)
         os.makedirs(self.user_data_dir, exist_ok=True)
+        os.makedirs(self.logs_dir, exist_ok=True)
+
+    def append_log(self, entry_str: str):
+        """Appends a log line to the persistent tenant log file on disk."""
+        with self._lock:
+            try:
+                with open(self.latest_log_file, "a", encoding="utf-8") as f:
+                    f.write(entry_str + "\n")
+            except Exception:
+                pass
+
+    def clear_log(self):
+        """Initializes/resets the persistent tenant log file for a new extraction run."""
+        with self._lock:
+            try:
+                with open(self.latest_log_file, "w", encoding="utf-8") as f:
+                    from datetime import datetime
+                    f.write(f"--- Extraction Log Started: {datetime.now().isoformat()} ---\n")
+            except Exception:
+                pass
 
     def purge_all_data(self):
         """Completely purges all data for this tenant (media, manifests, user_data, archives)."""
