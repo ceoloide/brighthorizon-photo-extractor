@@ -908,9 +908,11 @@ class ScraperJob:
                         self.log("Submitting email step...")
                         btn = page.locator("button[type='submit'], button[name='action'], button:has-text('Continue'), button:has-text('Next')").first
                         if btn.count() > 0 and btn.is_visible():
-                            btn.click()
-                        else:
-                            page.keyboard.press("Enter")
+                            try:
+                                btn.click(force=True)
+                            except Exception:
+                                btn.evaluate("(el) => el.click()")
+                        page.keyboard.press("Enter")
                         try:
                             page.locator("input[name='password']:not(.hide), input[id='password'], span#error-element-username, div#error-element-username, .ulp-input-error-message").first.wait_for(state="visible", timeout=15000)
                         except Exception:
@@ -924,7 +926,13 @@ class ScraperJob:
             self.log("Filling password...")
             if update_progress_cb: update_progress_cb("Submitting password...", 2)
             page.fill("input[name='password']:not(.hide), input[id='password']", self.password)
-            self.log("Pressing Enter to submit password...")
+            self.log("Submitting password step...")
+            btn_pwd = page.locator("button[type='submit'], button[name='action'], button:has-text('Continue'), button:has-text('Log In')").first
+            if btn_pwd.count() > 0 and btn_pwd.is_visible():
+                try:
+                    btn_pwd.click(force=True)
+                except Exception:
+                    btn_pwd.evaluate("(el) => el.click()")
             page.keyboard.press("Enter")
                 
             self.log("Waiting for post-login redirection or MFA challenge...")
