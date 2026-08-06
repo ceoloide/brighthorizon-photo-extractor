@@ -316,10 +316,10 @@ def click_timeframe_tile(page: Page, tile_locator: Any) -> bool:
         return False
 
 
-def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 60.0, max_retries: int = 2, logger=None) -> bool:
+def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 360.0, max_retries: int = 2, logger=None) -> bool:
     """
-    Dynamically waits up to max_wait_sec (default 60s) for Knockout.js feed items or 'no events for the month' indicator.
-    Supports re-clicking the month tile ONLY if processing is stalled and spinner is inactive.
+    Dynamically waits up to max_wait_sec (default 360s / 6m) for Knockout.js feed items or 'no events for the month' indicator.
+    Supports re-clicking the month tile if processing is stalled without spinner (after 22s) or as a hard backstop after 180s.
     
     Returns True if month has events and media URLs are fully populated.
     Returns False if confirmed empty or timed out.
@@ -399,8 +399,15 @@ def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 60
                         log_fn(f"Timeframe month '{tf_text}' feed is ready in {elapsed:.1f}s: Discovered {p_count} total <li> cards ({ready_count} matching direct GCS signed URL targets).")
                         return True
 
-            # If stalled > 22 seconds without cards and spinner is not active, attempt re-click
-            if elapsed > 22.0 and (time.time() - last_reclick_time >= 22.0) and p_count == 0:
+            # Hard 180s Backstop: If loading is stuck for >= 180s (even with active spinner), force a backstop re-click
+            if (time.time() - last_reclick_time >= 180.0) and p_count == 0:
+                log_fn(f"[180s Backstop Triggered] Knockout AJAX request for '{tf_text}' has been stalled for {elapsed:.1f}s. Forcing tile re-click as a backstop...")
+                try:
+                    click_timeframe_tile(page, tf_text)
+                except Exception as e:
+                    log_fn(f"Backstop re-click exception: {e}")
+                last_reclick_time = time.time()
+            elif elapsed > 22.0 and (time.time() - last_reclick_time >= 22.0) and p_count == 0:
                 if not is_processing:
                     log_fn(f"Loading stalled for '{tf_text}' after {elapsed:.1f}s (no spinner). Re-clicking timeframe tile...")
                     try:
