@@ -341,45 +341,67 @@ def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 60
             last_log_time = time.time()
 
         try:
-            empty_loc = page.locator("h1:has-text('no events for the month'), h1:has-text('welcome to tadpoles'), h1:has-text('no entries')").first
-            timeline = page.locator("div.well.left-panel.pull-left, div.well.pull-left, div.well")
-            posts_loc = timeline.locator("ul.thumbnails li") if timeline.count() > 0 else page.locator("ul.thumbnails li")
-            
-            # Check for empty month header
-            if empty_loc.count() > 0 and empty_loc.is_visible():
-                page.wait_for_timeout(1500)
-                if posts_loc.count() == 0:
+            # 1-batch JS evaluation for fast readiness check (<2ms)
+            status = page.evaluate("""
+                () => {
+                    const emptyH1 = document.querySelector('h1');
+                    const emptyText = emptyH1 ? (emptyH1.innerText || emptyH1.textContent || '').toLowerCase() : '';
+                    const isEmpty = emptyText.includes('no events for the month') || emptyText.includes('welcome to tadpoles') || emptyText.includes('no entries');
+                    
+                    const spinner = document.querySelector('i.fa-spinner');
+                    const isProcessing = spinner ? (spinner.offsetWidth > 0 && spinner.offsetHeight > 0 && window.getComputedStyle(spinner).display !== 'none') : false;
+                    
+                    const timeline = document.querySelector('div.well.left-panel.pull-left, div.well.pull-left, div.well') || document.body;
+                    const lis = Array.from(timeline.querySelectorAll('ul.thumbnails li'));
+                    
+                    let readyCount = 0;
+                    for (const li of lis) {
+                        const fancybox = li.querySelector('a.fancybox');
+                        const href = fancybox ? (fancybox.getAttribute('href') || '') : '';
+                        if (href.startsWith('http') || href.includes('obj_attachment')) {
+                            readyCount++;
+                        } else if (href.startsWith('#')) {
+                            const divId = href.replace(/^#/, '');
+                            let relDiv = null;
+                            try { relDiv = li.querySelector(`div#${CSS.escape(divId)}`); } catch(e){}
+                            if (!relDiv) relDiv = document.getElementById(divId);
+                            const relUrl = relDiv ? (relDiv.getAttribute('rel') || '') : '';
+                            if (relUrl && (relUrl.includes('http') || relUrl.includes('obj'))) {
+                                readyCount++;
+                            }
+                        }
+                    }
+                    
+                    return {
+                        isEmpty,
+                        isProcessing,
+                        totalCards: lis.length,
+                        readyCount
+                    };
+                }
+            """)
+
+            # Check empty month state
+            if status["isEmpty"]:
+                page.wait_for_timeout(1000)
+                if status["totalCards"] == 0:
                     log_fn(f"Timeframe month '{tf_text}' confirmed empty ('no events for the month').")
                     return False
-            
-            # Check for feed items
-            p_count = posts_loc.count()
+
+            # Check feed readiness
+            p_count = status["totalCards"]
+            ready_count = status["readyCount"]
+            is_processing = status["isProcessing"]
+
             if p_count > 0:
-                is_processing = page.evaluate("() => !!document.querySelector('i.fa-spinner:not([style*=\"display: none\"])')")
                 if not is_processing or elapsed > 15.0:
-                    ready_count = 0
-                    lis = posts_loc.all()
-                    for li in lis:
-                        fancybox = li.locator("a.fancybox").first
-                        if fancybox.count() > 0:
-                            href = fancybox.get_attribute("href") or ""
-                            if href.startswith("http") or href.startswith("https://storage.googleapis.com") or "obj_attachment" in href:
-                                ready_count += 1
-                            elif href.startswith("#"):
-                                div_id = href.lstrip("#")
-                                rel_div = li.locator(f"div#{div_id}").first
-                                rel_url = rel_div.get_attribute("rel") if rel_div.count() > 0 else ""
-                                if rel_url and ("http" in rel_url or "storage.googleapis.com" in rel_url or "obj" in rel_url):
-                                    ready_count += 1
-                    
-                    if ready_count >= p_count or (p_count > 0 and ready_count > 0 and elapsed > 5.0):
+                    if ready_count >= p_count or (p_count > 0 and ready_count > 0 and elapsed > 4.0):
                         log_fn(f"Timeframe month '{tf_text}' feed is ready in {elapsed:.1f}s: Discovered {p_count} total <li> cards ({ready_count} matching direct GCS signed URL targets).")
                         return True
 
             # If stalled > 22 seconds without cards and spinner is not active, attempt re-click
             if elapsed > 22.0 and (time.time() - last_reclick_time >= 22.0) and p_count == 0:
-                is_busy = page.evaluate("() => !!document.querySelector('i.fa-spinner:not([style*=\"display: none\"])')")
-                if not is_busy:
+                if not is_processing:
                     log_fn(f"Loading stalled for '{tf_text}' after {elapsed:.1f}s (no spinner). Re-clicking timeframe tile...")
                     try:
                         click_timeframe_tile(page, tf_text)
@@ -389,7 +411,7 @@ def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 60
         except Exception:
             pass
         
-        page.wait_for_timeout(400)
+        page.wait_for_timeout(350)
 
     log_fn(f"Timed out waiting for timeframe month '{tf_text}' after {max_wait_sec:.1f} seconds.")
     return False
