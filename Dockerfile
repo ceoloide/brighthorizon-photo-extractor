@@ -49,9 +49,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # 2. Python package dependencies (Cached Pip Layer)
 COPY requirements.txt .
-RUN groupadd -g 10001 appgroup && \
-    useradd -u 10001 -g appgroup -m -s /bin/bash appuser && \
-    pip install --no-cache-dir -r requirements.txt \
+RUN pip install --no-cache-dir -r requirements.txt \
     && playwright install chromium
 
 # 3. Frontend Dist Bundle (Cached Frontend Layer)
@@ -61,10 +59,6 @@ COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 COPY backend/ ./backend/
 COPY version.json .
 COPY main.py .
-
-RUN mkdir -p /app/data /tmp/.X11-unix && chmod 777 /tmp /tmp/.X11-unix && chown -R appuser:appgroup /app
-
-USER appuser
 
 EXPOSE 8095
 VOLUME ["/app/data"]
