@@ -316,10 +316,10 @@ def click_timeframe_tile(page: Page, tile_locator: Any) -> bool:
         return False
 
 
-def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 300.0, max_retries: int = 3, logger=None) -> bool:
+def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 60.0, max_retries: int = 2, logger=None) -> bool:
     """
-    Dynamically waits up to max_wait_sec for Knockout.js feed items or 'no events for the month' indicator.
-    Supports re-clicking the month tile up to max_retries times ONLY if processing is not currently active.
+    Dynamically waits up to max_wait_sec (default 60s) for Knockout.js feed items or 'no events for the month' indicator.
+    Supports re-clicking the month tile ONLY if processing is stalled and spinner is inactive.
     
     Returns True if month has events and media URLs are fully populated.
     Returns False if confirmed empty or timed out.
@@ -328,66 +328,70 @@ def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 30
     log_fn = logger if logger else print
 
     start_time = time.time()
+    last_reclick_time = start_time
+    last_log_time = start_time
 
-    for attempt in range(max_retries + 1):
-        if attempt > 0:
-            # SAFETY: Check if Knockout is currently processing an AJAX request
+    while time.time() - start_time < max_wait_sec:
+        elapsed = time.time() - start_time
+        
+        # Periodic progress logging every 6 seconds
+        if time.time() - last_log_time >= 6.0:
             is_busy = page.evaluate("() => !!document.querySelector('i.fa-spinner:not([style*=\"display: none\"])')")
-            if is_busy:
-                log_fn(f"[Retry #{attempt}/{max_retries}] Knockout is still loading AJAX response for '{tf_text}'... waiting instead of re-clicking.")
-            else:
-                log_fn(f"[Retry #{attempt}/{max_retries}] Re-clicking timeframe month tile '{tf_text}'...")
-                try:
-                    click_timeframe_tile(page, tf_text)
-                except Exception as e:
-                    log_fn(f"Re-click tile exception: {e}")
+            log_fn(f"Waiting for Knockout feed '{tf_text}'... elapsed {elapsed:.1f}s (spinner active: {is_busy})")
+            last_log_time = time.time()
 
-        attempt_start = time.time()
-        page.wait_for_timeout(800)
-
-        # Allow generous wait window (up to 25s per attempt) for heavy months (100+ images/videos)
-        while time.time() - attempt_start < 25.0:
-            try:
-                empty_loc = page.locator("h1:has-text('no events for the month'), h1:has-text('welcome to tadpoles'), h1:has-text('no entries')").first
-                timeline = page.locator("div.well.left-panel.pull-left, div.well.pull-left, div.well")
-                posts_loc = timeline.locator("ul.thumbnails li") if timeline.count() > 0 else page.locator("ul.thumbnails li")
-                
-                # Check for empty month header
-                if empty_loc.count() > 0 and empty_loc.is_visible():
-                    page.wait_for_timeout(1500)
-                    if posts_loc.count() == 0:
-                        log_fn(f"Timeframe month '{tf_text}' confirmed empty ('no events for the month').")
-                        return False
-                
-                # Check for feed items
-                p_count = posts_loc.count()
-                if p_count > 0:
-                    is_processing = page.evaluate("() => !!document.querySelector('i.fa-spinner:not([style*=\"display: none\"])')")
-                    if not is_processing or (time.time() - start_time > 12.0):
-                        ready_count = 0
-                        lis = posts_loc.all()
-                        for li in lis:
-                            fancybox = li.locator("a.fancybox").first
-                            if fancybox.count() > 0:
-                                href = fancybox.get_attribute("href") or ""
-                                if href.startswith("http") or href.startswith("https://storage.googleapis.com") or "obj_attachment" in href:
-                                    ready_count += 1
-                                elif href.startswith("#"):
-                                    div_id = href.lstrip("#")
-                                    rel_div = li.locator(f"div#{div_id}").first
-                                    rel_url = rel_div.get_attribute("rel") if rel_div.count() > 0 else ""
-                                    if rel_url and ("http" in rel_url or "storage.googleapis.com" in rel_url or "obj" in rel_url):
-                                        ready_count += 1
-                        
-                        if ready_count >= p_count or (p_count > 0 and ready_count > 0 and (time.time() - start_time > 5.0)):
-                            log_fn(f"Timeframe month '{tf_text}' feed is ready: Discovered {p_count} total <li> cards ({ready_count} matching direct GCS signed URL targets).")
-                            return True
-            except Exception:
-                pass
+        try:
+            empty_loc = page.locator("h1:has-text('no events for the month'), h1:has-text('welcome to tadpoles'), h1:has-text('no entries')").first
+            timeline = page.locator("div.well.left-panel.pull-left, div.well.pull-left, div.well")
+            posts_loc = timeline.locator("ul.thumbnails li") if timeline.count() > 0 else page.locator("ul.thumbnails li")
             
-            page.wait_for_timeout(300)
+            # Check for empty month header
+            if empty_loc.count() > 0 and empty_loc.is_visible():
+                page.wait_for_timeout(1500)
+                if posts_loc.count() == 0:
+                    log_fn(f"Timeframe month '{tf_text}' confirmed empty ('no events for the month').")
+                    return False
+            
+            # Check for feed items
+            p_count = posts_loc.count()
+            if p_count > 0:
+                is_processing = page.evaluate("() => !!document.querySelector('i.fa-spinner:not([style*=\"display: none\"])')")
+                if not is_processing or elapsed > 15.0:
+                    ready_count = 0
+                    lis = posts_loc.all()
+                    for li in lis:
+                        fancybox = li.locator("a.fancybox").first
+                        if fancybox.count() > 0:
+                            href = fancybox.get_attribute("href") or ""
+                            if href.startswith("http") or href.startswith("https://storage.googleapis.com") or "obj_attachment" in href:
+                                ready_count += 1
+                            elif href.startswith("#"):
+                                div_id = href.lstrip("#")
+                                rel_div = li.locator(f"div#{div_id}").first
+                                rel_url = rel_div.get_attribute("rel") if rel_div.count() > 0 else ""
+                                if rel_url and ("http" in rel_url or "storage.googleapis.com" in rel_url or "obj" in rel_url):
+                                    ready_count += 1
+                    
+                    if ready_count >= p_count or (p_count > 0 and ready_count > 0 and elapsed > 5.0):
+                        log_fn(f"Timeframe month '{tf_text}' feed is ready in {elapsed:.1f}s: Discovered {p_count} total <li> cards ({ready_count} matching direct GCS signed URL targets).")
+                        return True
 
-    log_fn(f"Timed out waiting for timeframe month '{tf_text}' after {max_retries + 1} attempts.")
+            # If stalled > 22 seconds without cards and spinner is not active, attempt re-click
+            if elapsed > 22.0 and (time.time() - last_reclick_time >= 22.0) and p_count == 0:
+                is_busy = page.evaluate("() => !!document.querySelector('i.fa-spinner:not([style*=\"display: none\"])')")
+                if not is_busy:
+                    log_fn(f"Loading stalled for '{tf_text}' after {elapsed:.1f}s (no spinner). Re-clicking timeframe tile...")
+                    try:
+                        click_timeframe_tile(page, tf_text)
+                    except Exception as e:
+                        log_fn(f"Re-click tile exception: {e}")
+                    last_reclick_time = time.time()
+        except Exception:
+            pass
+        
+        page.wait_for_timeout(400)
+
+    log_fn(f"Timed out waiting for timeframe month '{tf_text}' after {max_wait_sec:.1f} seconds.")
     return False
 
 
