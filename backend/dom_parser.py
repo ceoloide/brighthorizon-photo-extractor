@@ -445,6 +445,10 @@ def extract_feed_items(page: Page, timeframe_year: Optional[int] = None, logger:
             m_key = re.search(r'key=([^&#"\'\)\s]+)', resolved_url) or re.search(r'key=([^&#"\'\)\s]+)', raw_href) or re.search(r'key=([^&#"\'\)\s]+)', rel_attr) or re.search(r'key=([^&#"\'\)\s]+)', style_attr)
             key_id = m_key.group(1) if m_key else obj_id
 
+            raw_date = card.get("rawDateText") or ""
+            date_str = parse_date_overlay(raw_date, timeframe_year=timeframe_year)
+            comment_text = card.get("commentText") or ""
+
             media_type = "video" if is_video else "photo"
             if resolved_url.startswith("http"):
                 download_url = resolved_url
