@@ -51,7 +51,18 @@ def clean_user_data_locks(user_data_dir: str) -> List[str]:
     if not os.path.exists(user_data_dir):
         return removed
 
+    if not os.access(user_data_dir, os.W_OK):
+        try:
+            os.chmod(user_data_dir, 0o777)
+        except Exception:
+            pass
+
     for root, dirs, files in os.walk(user_data_dir):
+        if not os.access(root, os.W_OK):
+            try:
+                os.chmod(root, 0o777)
+            except Exception:
+                pass
         # Check files and symlinks
         for fname in files:
             if any(fnmatch.fnmatch(fname, pat) for pat in LOCK_FILE_PATTERNS):

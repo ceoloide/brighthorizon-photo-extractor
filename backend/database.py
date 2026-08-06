@@ -27,11 +27,13 @@ class TenantStorage:
         self._ensure_dirs()
         
     def _ensure_dirs(self):
-        os.makedirs(self.tenant_dir, exist_ok=True)
-        os.makedirs(self.media_dir, exist_ok=True)
-        os.makedirs(self.archives_dir, exist_ok=True)
-        os.makedirs(self.user_data_dir, exist_ok=True)
-        os.makedirs(self.logs_dir, exist_ok=True)
+        for d in [self.tenant_dir, self.media_dir, self.archives_dir, self.user_data_dir, self.logs_dir]:
+            os.makedirs(d, exist_ok=True)
+            if not os.access(d, os.W_OK):
+                try:
+                    os.chmod(d, 0o777)
+                except Exception:
+                    pass
 
     def append_log(self, entry_str: str):
         """Appends a log line to the persistent tenant log file on disk."""
