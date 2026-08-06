@@ -30,3 +30,7 @@ Thumbs.db
 
 # Backup files
 *.bak
+
+# Temporary diagnostic scripts and copied user data
+scratch/
+user_data_copy/
