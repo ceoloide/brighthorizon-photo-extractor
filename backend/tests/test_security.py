@@ -283,6 +283,94 @@ def test_download_archive_persisted_disk_detection():
     assert status["status"] == "ready"
     assert status["archive_id"] == "archive_persist.zip"
 
+def test_cross_tenant_media_isolation():
+    from unittest.mock import MagicMock
+    from fastapi import HTTPException
+    from backend.server import serve_media
+    from backend.database import TenantStorage
+    from backend.security import create_jwt_token, get_tenant_id
+
+    mock_request = MagicMock()
+    mock_request.cookies = {}
+
+    email_a = "user_a@example.com"
+    email_b = "user_b@example.com"
+
+    tenant_a = TenantStorage(email_a)
+    tenant_b = TenantStorage(email_b)
+
+    try:
+        # Create media asset in Tenant B
+        media_id_b = "tenant_b_secret_photo_999"
+        rel_media_path = "media/secret_photo.jpg"
+        abs_media_path = os.path.join(tenant_b.tenant_dir, rel_media_path)
+        os.makedirs(os.path.dirname(abs_media_path), exist_ok=True)
+        with open(abs_media_path, "wb") as f:
+            f.write(b"tenant_b_private_image_bytes")
+
+        manifest_b = {
+            media_id_b: {
+                "obj_id": media_id_b,
+                "storage_path": rel_media_path,
+                "mime_type": "image/jpeg",
+                "original_filename": "secret_photo.jpg"
+            }
+        }
+        tenant_b.save_manifest(manifest_b)
+
+        token_a = create_jwt_token(email_a, get_tenant_id(email_a))
+        token_b = create_jwt_token(email_b, get_tenant_id(email_b))
+
+        # Tenant A attempts to access Tenant B's media -> MUST FAIL with 404
+        with pytest.raises(HTTPException) as exc_info:
+            serve_media(media_id=media_id_b, request=mock_request, token=token_a)
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.detail == "Media asset not found or unauthorized"
+
+        # Tenant B accesses Tenant B's media -> MUST SUCCEED returning FileResponse
+        resp_b = serve_media(media_id=media_id_b, request=mock_request, token=token_b)
+        assert resp_b.path == abs_media_path
+        assert resp_b.media_type == "image/jpeg"
+        assert resp_b.filename == "secret_photo.jpg"
+    finally:
+        tenant_a.purge_all_data()
+        tenant_b.purge_all_data()
+
+def test_cors_allowed_origins_configuration():
+    from backend.server import allow_credentials, allowed_origins
+
+    # Default allowed_origins should not include wildcard "*"
+    assert "*" not in allowed_origins
+    assert allow_credentials is True
+    assert "https://bears.ceoloide.com" in allowed_origins
+    assert "https://ceoloide.com" in allowed_origins
+
+def test_tenant_storage_path_prefix_collision_prevention():
+    from backend.database import TenantStorage
+    
+    storage = TenantStorage("prefix_test_user@example.com")
+    try:
+        # Save a manifest with a prefix collision path targeting another directory
+        manifest = {
+            "bad_item": {
+                "obj_id": "bad1",
+                "storage_path": "../prefix_test_user_other/secret.txt"
+            }
+        }
+        storage.save_manifest(manifest)
+        
+        # Path resolution must return None due to path boundary enforcement
+        res = storage.get_media_file_path("bad_item")
+        assert res is None
+
+        res_thumb = storage.get_media_thumbnail_bytes("bad_item")
+        assert res_thumb is None
+    finally:
+        storage.purge_all_data()
+
+
+
+
 
 
 

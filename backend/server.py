@@ -21,10 +21,24 @@ from backend.archive_stream import start_zip_task, get_archive_status, range_str
 
 app = FastAPI(title="Bright Horizons Photo Extractor API", version="2.0.0")
 
+allowed_origins_raw = os.environ.get("ALLOWED_ORIGINS", "").strip()
+if allowed_origins_raw:
+    allowed_origins = [o.strip() for o in allowed_origins_raw.split(",") if o.strip()]
+else:
+    allowed_origins = [
+        "http://localhost:8095",
+        "http://localhost:3000",
+        "http://127.0.0.1:8095",
+        "https://bears.ceoloide.com",
+        "https://ceoloide.com",
+    ]
+
+allow_credentials = "*" not in allowed_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=allowed_origins,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -522,32 +536,6 @@ def serve_media(media_id: str, request: Request, token: Optional[str] = None, au
             abs_path, mime_type, orig_filename = file_info
             return FileResponse(abs_path, media_type=mime_type, filename=orig_filename)
 
-    # Fallback for session/local dev mode: search tenant directories directly for media_id
-    if os.path.exists(TENANTS_DIR):
-        for tenant_folder in os.listdir(TENANTS_DIR):
-            t_dir = os.path.join(TENANTS_DIR, tenant_folder)
-            m_file = os.path.join(t_dir, "manifest.enc")
-            if not os.path.exists(m_file):
-                m_file = os.path.join(t_dir, "manifest.dat")
-            if os.path.exists(m_file):
-                try:
-                    with open(m_file, "r") as f:
-                        manifest = decrypt_json(f.read())
-                    if media_id in manifest:
-                        item = manifest[media_id]
-                        if thumb or thumbnail:
-                            tenant_obj = TenantStorage(tenant_folder)
-                            thumb_bytes = tenant_obj.get_media_thumbnail_bytes(media_id)
-                            if thumb_bytes:
-                                return Response(content=thumb_bytes, media_type="image/jpeg")
-                        rel_path = item.get("storage_path")
-                        if rel_path:
-                            abs_path = os.path.abspath(os.path.join(t_dir, rel_path))
-                            if abs_path.startswith(os.path.abspath(t_dir)) and os.path.exists(abs_path):
-                                return FileResponse(abs_path, media_type=item.get("mime_type", "image/jpeg"), filename=item.get("original_filename", "photo.jpg"))
-                except Exception:
-                    pass
-
     raise HTTPException(status_code=404, detail="Media asset not found or unauthorized")
 
 @app.get("/api/media/{media_id}/thumbnail")
@@ -597,7 +585,9 @@ def download_archive(request: Request, token: Optional[str] = None, authorizatio
 # Serve frontend static files
 dist_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "dist"))
 if os.path.exists(dist_dir):
-    app.mount("/assets", StaticFiles(directory=os.path.join(dist_dir, "assets")), name="assets")
+    assets_dir = os.path.join(dist_dir, "assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
     @app.get("/{full_path:path}")
     def serve_frontend(full_path: str):
         if full_path.startswith("api/"):

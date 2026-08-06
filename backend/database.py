@@ -7,6 +7,7 @@ import threading
 import uuid
 from typing import Dict, Any, List, Optional, Tuple
 from backend.security import get_tenant_id, encrypt_json, decrypt_json, DATA_DIR
+from backend.security_isolation import canonicalize_and_validate_path, SecurityPathTraversalError
 
 class TenantStorage:
     def __init__(self, email: str):
@@ -136,8 +137,9 @@ class TenantStorage:
             for m_id, item in manifest.items():
                 if item.get("obj_id") == obj_id:
                     # Update existing file content/metadata
-                    target_path = os.path.abspath(os.path.join(self.tenant_dir, item["storage_path"]))
-                    if not target_path.startswith(os.path.abspath(self.tenant_dir)):
+                    try:
+                        target_path = canonicalize_and_validate_path(self.tenant_dir, item["storage_path"])
+                    except SecurityPathTraversalError:
                         raise Exception("Security Error: Path traversal attempt detected")
                     with open(target_path, "wb") as f:
                         f.write(file_bytes)
@@ -149,9 +151,9 @@ class TenantStorage:
             # New entry
             media_id = str(uuid.uuid4())
             rel_storage_path = os.path.join("media", f"{media_id}.dat")
-            abs_storage_path = os.path.abspath(os.path.join(self.tenant_dir, rel_storage_path))
-            
-            if not abs_storage_path.startswith(os.path.abspath(self.tenant_dir)):
+            try:
+                abs_storage_path = canonicalize_and_validate_path(self.tenant_dir, rel_storage_path)
+            except SecurityPathTraversalError:
                 raise Exception("Security Error: Path traversal attempt detected")
                 
             with open(abs_storage_path, "wb") as f:
@@ -160,7 +162,10 @@ class TenantStorage:
             # Generate & save 400x400 square thumbnail
             is_vid = mime_type.startswith("video") or original_filename.lower().endswith((".mp4", ".mov", ".avi", ".mkv", ".webm"))
             rel_thumb_path = os.path.join("media", f"{media_id}_thumb.dat")
-            abs_thumb_path = os.path.abspath(os.path.join(self.tenant_dir, rel_thumb_path))
+            try:
+                abs_thumb_path = canonicalize_and_validate_path(self.tenant_dir, rel_thumb_path)
+            except SecurityPathTraversalError:
+                abs_thumb_path = os.path.join(self.tenant_dir, rel_thumb_path)
             try:
                 from backend.thumbnail import generate_square_thumbnail
                 thumb_bytes = generate_square_thumbnail(file_bytes, is_video=is_vid)
@@ -211,9 +216,9 @@ class TenantStorage:
         item = manifest.get(media_id)
         if not item or "storage_path" not in item:
             return None
-        abs_path = os.path.abspath(os.path.join(self.tenant_dir, item["storage_path"]))
-        # Enforce strict path traversal verification
-        if not abs_path.startswith(os.path.abspath(self.tenant_dir)):
+        try:
+            abs_path = canonicalize_and_validate_path(self.tenant_dir, item["storage_path"])
+        except SecurityPathTraversalError:
             return None
         if not os.path.exists(abs_path):
             return None
@@ -230,7 +235,10 @@ class TenantStorage:
             return None
 
         rel_thumb_path = item.get("thumb_path") or os.path.join("media", f"{media_id}_thumb.dat")
-        abs_thumb_path = os.path.abspath(os.path.join(self.tenant_dir, rel_thumb_path))
+        try:
+            abs_thumb_path = canonicalize_and_validate_path(self.tenant_dir, rel_thumb_path)
+        except SecurityPathTraversalError:
+            return None
 
         if os.path.exists(abs_thumb_path):
             try:
