@@ -59,10 +59,20 @@ export const ArchiveManager: React.FC<ArchiveManagerProps> = ({ token }) => {
 
   const formatBytes = (bytes?: number) => {
     if (!bytes || isNaN(bytes) || bytes <= 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    const kDecimal = 1000;
+    const kBinary = 1024;
+    const sizesDecimal = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const sizesBinary = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+
+    const iDec = Math.floor(Math.log(bytes) / Math.log(kDecimal));
+    const valDec = parseFloat((bytes / Math.pow(kDecimal, iDec)).toFixed(2)) + ' ' + sizesDecimal[iDec];
+
+    if (iDec >= 2) {
+      const iBin = Math.floor(Math.log(bytes) / Math.log(kBinary));
+      const valBin = parseFloat((bytes / Math.pow(kBinary, iBin)).toFixed(2)) + ' ' + sizesBinary[iBin];
+      return `${valDec} (${valBin})`;
+    }
+    return valDec;
   };
 
   const isUpToDate = status.status === 'ready' && status.up_to_date;
