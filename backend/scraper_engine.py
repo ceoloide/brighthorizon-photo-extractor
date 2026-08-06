@@ -1491,7 +1491,7 @@ class ScraperJob:
 
             self.log(f"Starting parallel download for {len(download_queue)} items in timeframe {tf_text}...")
 
-            # Concurrent Multi-Threaded Task Execution
+            # Concurrent Multi-Threaded Task Execution (max_workers=2 for stable connection management)
             def _download_task(task_info):
                 if self._cancelled:
                     return False
@@ -1518,32 +1518,39 @@ class ScraperJob:
 
                 # Exponential backoff retries: 1s, 2s, 4s, 8s, 16s, 30s cap
                 backoff_delays = [1.0, 2.0, 4.0, 8.0, 16.0, 30.0]
-                for attempt in range(len(backoff_delays)):
+                for attempt, delay in enumerate(backoff_delays):
                     try:
                         resp = requests.get(d_url, headers=req_headers, timeout=60)
-                        if resp.status_code == 200:
-                            body_content = resp.content
-                            try:
-                                json_data = json.loads(body_content.decode("utf-8"))
-                                if isinstance(json_data, dict) and "signed_url" in json_data:
-                                    s_url = json_data["signed_url"]
-                                    if json_data.get("mime_type"):
-                                        mime_type = json_data["mime_type"]
-                                    s_resp = requests.get(s_url, headers={"User-Agent": req_headers["User-Agent"]}, timeout=60)
-                                    if s_resp.status_code == 200:
-                                        file_bytes = s_resp.content
-                                        break
-                            except Exception:
-                                file_bytes = body_content
-                                h_ct = resp.headers.get("Content-Type", "")
-                                if h_ct and "text/html" not in h_ct:
-                                    mime_type = h_ct
+                        if resp.status_code != 200:
+                            raise Exception(f"HTTP {resp.status_code} {resp.reason}")
+
+                        body_content = resp.content
+                        try:
+                            json_data = json.loads(body_content.decode("utf-8"))
+                            if isinstance(json_data, dict) and "signed_url" in json_data:
+                                s_url = json_data["signed_url"]
+                                if json_data.get("mime_type"):
+                                    mime_type = json_data["mime_type"]
+                                s_resp = requests.get(s_url, headers={"User-Agent": req_headers["User-Agent"]}, timeout=60)
+                                if s_resp.status_code != 200:
+                                    raise Exception(f"Signed URL HTTP {s_resp.status_code}")
+                                file_bytes = s_resp.content
                                 break
+                        except json.JSONDecodeError:
+                            file_bytes = body_content
+                            h_ct = resp.headers.get("Content-Type", "")
+                            if h_ct and "text/html" not in h_ct:
+                                mime_type = h_ct
+                            break
+                        except Exception:
+                            file_bytes = body_content
+                            break
                     except Exception as req_err:
                         if attempt == len(backoff_delays) - 1:
-                            self.log(f"[Download Error] Failed obj_id {o_id[:8]} after {len(backoff_delays)} attempts: {req_err}")
+                            self.log(f"[Download Error] Permanent failure for obj_id {o_id[:8]} after {len(backoff_delays)} attempts: {req_err}")
                         else:
-                            time.sleep(backoff_delays[attempt])
+                            self.log(f"[Download Retry #{attempt + 1}/{len(backoff_delays)}] Retrying obj_id {o_id[:8]}... Error: {req_err} (waiting {delay}s)...")
+                            time.sleep(delay)
 
                 if not file_bytes:
                     return False
@@ -1571,12 +1578,21 @@ class ScraperJob:
                 self.log(f"Fetched direct GCS asset for {child_name} {d_str} ({seq_num:02d}) -> saved as '{filename}' ({len(file_bytes)} bytes).")
                 return True
 
-            with ThreadPoolExecutor(max_workers=8) as executor:
+            with ThreadPoolExecutor(max_workers=2) as executor:
                 futures = [executor.submit(_download_task, task) for task in download_queue]
                 results = [f.result() for f in futures]
 
             success_count = sum(1 for r in results if r)
-            self.log(f"Completed timeframe {tf_text}: {success_count}/{len(download_queue)} items successfully downloaded.")
+            total_expected = len(download_queue)
+
+            if success_count < total_expected:
+                err_msg = f"Extraction incomplete for timeframe '{tf_text}': downloaded only {success_count}/{total_expected} assets!"
+                self.log(f"[ERROR] {err_msg}")
+                self.status["state"] = "failed"
+                self.status["error"] = err_msg
+                raise RuntimeError(err_msg)
+
+            self.log(f"Completed timeframe {tf_text}: all {success_count}/{total_expected} items successfully downloaded.")
 
     def scroll_and_load(self, page: Page):
         """Scrolls down the page until no new content is loaded to ensure all photos are rendered (ported from working main.py skill code)."""
