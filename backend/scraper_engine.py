@@ -906,12 +906,16 @@ class ScraperJob:
                     pwd_inp_check = page.locator("input[name='password']:not(.hide), input[id='password']").first
                     if pwd_inp_check.count() == 0 or not pwd_inp_check.is_visible():
                         self.log("Submitting email step...")
+                        username_inp = page.locator("input[name='username'], input[id='username'], input[type='email']").first
+                        if username_inp.count() > 0:
+                            try: username_inp.press("Enter")
+                            except Exception: pass
                         btn = page.locator("button[type='submit'], button[name='action'], button:has-text('Continue'), button:has-text('Next')").first
-                        if btn.count() > 0 and btn.is_visible():
+                        if btn.count() > 0:
                             try:
-                                btn.click(force=True)
+                                btn.evaluate("(el) => { if (el.form && el.form.requestSubmit) { try { el.form.requestSubmit(); } catch(e) { el.click(); } } else { el.click(); } }")
                             except Exception:
-                                btn.evaluate("(el) => el.click()")
+                                btn.click(force=True)
                         page.keyboard.press("Enter")
                         try:
                             page.locator("input[name='password']:not(.hide), input[id='password'], span#error-element-username, div#error-element-username, .ulp-input-error-message").first.wait_for(state="visible", timeout=15000)
@@ -936,10 +940,8 @@ class ScraperJob:
             page.keyboard.press("Enter")
                 
             self.log("Waiting for post-login redirection or MFA challenge...")
-            
-            # Dynamically wait for post-login redirection or MFA prompt
             try:
-                page.locator("input[name='code'], span:has-text('Actions'), h1, span#error-element-password, div.alert-danger").first.wait_for(state="visible", timeout=15000)
+                page.wait_for_url(lambda u: "/home" in u or "/dashboard" in u or "/mfa" in u or "familyinfocenter" in u, timeout=45000)
             except Exception:
                 pass
                 
