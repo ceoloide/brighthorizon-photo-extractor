@@ -189,6 +189,30 @@ def test_mfa_volatile_memory_zero_disk_clearing():
     assert "_mfa_code" not in config
     assert "987654" not in str(config)
 
+def test_single_archive_per_tenant_purging():
+    from backend.archive_stream import purge_previous_archives
+    from backend.database import TenantStorage
+    
+    storage = TenantStorage("archive_purge_test@example.com")
+    os.makedirs(storage.archives_dir, exist_ok=True)
+    
+    # Create dummy previous archive files
+    file1 = os.path.join(storage.archives_dir, "archive_1000.zip")
+    file2 = os.path.join(storage.archives_dir, "archive_2000.zip")
+    with open(file1, "w") as f: f.write("dummy1")
+    with open(file2, "w") as f: f.write("dummy2")
+    
+    assert os.path.exists(file1)
+    assert os.path.exists(file2)
+    
+    # Run purge
+    purge_previous_archives(storage.archives_dir)
+    
+    # Verify directory is cleared
+    remaining = os.listdir(storage.archives_dir)
+    assert len(remaining) == 0
+
+
 
 
 

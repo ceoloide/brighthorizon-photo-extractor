@@ -22,6 +22,17 @@ def get_archive_status(tenant_id: str) -> Dict[str, Any]:
         "error": None
     })
 
+def purge_previous_archives(archives_dir: str):
+    """Purges all existing archive files for a tenant to ensure at most one archive file exists."""
+    if os.path.exists(archives_dir):
+        for fname in os.listdir(archives_dir):
+            fpath = os.path.join(archives_dir, fname)
+            if os.path.isfile(fpath):
+                try:
+                    os.remove(fpath)
+                except Exception as e:
+                    print(f"[Archive Purge Error] Failed to remove previous archive {fpath}: {e}")
+
 def start_zip_task(tenant_storage: TenantStorage, layout: str = "flat") -> Dict[str, Any]:
     """Kicks off an asynchronous ZIP archive creation task in a background thread."""
     tenant_id = tenant_storage.tenant_id
@@ -30,6 +41,9 @@ def start_zip_task(tenant_storage: TenantStorage, layout: str = "flat") -> Dict[
     if current_task["status"] == "processing":
         return current_task
     
+    # Purge any previous archives to ensure at most a single archive exists per tenant
+    purge_previous_archives(tenant_storage.archives_dir)
+
     task_info = {
         "status": "processing",
         "progress_percent": 0.0,
