@@ -299,39 +299,50 @@ def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 30
     import time
     log_fn = logger if logger else print
 
+    js_click = """
+        (text) => {
+            const targetText = text.replace(/\\s+/g, ' ').trim().toLowerCase();
+            const lis = Array.from(document.querySelectorAll('li'));
+            const el = lis.find(item => {
+                const cleanItemText = (item.innerText || item.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                return cleanItemText === targetText;
+            });
+            if (el) {
+                const tile = el.querySelector('div.tile') || el.querySelector('div') || el;
+                tile.scrollIntoView({ block: 'center', inline: 'center' });
+                if (window.jQuery) {
+                    try { window.jQuery(tile).trigger('click'); } catch(e){}
+                }
+                const evt = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+                tile.dispatchEvent(evt);
+                return true;
+            }
+            return false;
+        }
+    """
+
     for attempt in range(max_retries + 1):
         if attempt > 0:
             log_fn(f"[Retry #{attempt}/{max_retries}] Re-clicking timeframe month tile '{tf_text}'...")
             try:
-                clicked = page.evaluate("""
-                    (text) => {
-                        const targetText = text.replace(/\\s+/g, ' ').trim().toLowerCase();
-                        const el = Array.from(document.querySelectorAll('li')).find(item => {
-                            const cleanItemText = (item.innerText || item.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-                            return cleanItemText === targetText;
-                        });
-                        if (el) {
-                            const clickable = el.querySelector('div.tile') || el.querySelector('div') || el;
-                            clickable.click();
-                            return true;
-                        }
-                        return false;
-                    }
-                """, tf_text)
+                page.evaluate(js_click, tf_text)
             except Exception as e:
                 log_fn(f"Re-click tile exception: {e}")
 
         start_time = time.time()
+        # Small 800ms grace period to allow Knockout.js to trigger processing spinner & clear previous month cards
+        page.wait_for_timeout(800)
+
         while time.time() - start_time < (max_wait_sec / (max_retries + 1)):
             try:
-                empty_loc = page.locator("div:has(> h1:has-text('no events for the month'))").first
-                timeline = page.locator("div.well.left-panel.pull-left")
-                posts_loc = timeline.locator("ul.thumbnails li") if timeline.count() > 0 else page.locator("div.well.left-panel.pull-left ul.thumbnails li")
+                empty_loc = page.locator("h1:has-text('no events for the month'), h1:has-text('welcome to tadpoles'), h1:has-text('no entries')").first
+                timeline = page.locator("div.well.left-panel.pull-left, div.well.pull-left, div.well")
+                posts_loc = timeline.locator("ul.thumbnails li") if timeline.count() > 0 else page.locator("ul.thumbnails li")
                 
                 # Check for empty month header
                 if empty_loc.count() > 0 and empty_loc.is_visible():
-                    # Wait 2.5s false-positive safety buffer to verify no post items arrive
-                    page.wait_for_timeout(2500)
+                    # Wait 1.5s false-positive safety buffer to verify no post items arrive
+                    page.wait_for_timeout(1500)
                     if posts_loc.count() == 0:
                         log_fn(f"Timeframe month '{tf_text}' confirmed empty ('no events for the month').")
                         return False
@@ -339,25 +350,28 @@ def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 30
                 # Check for feed items
                 p_count = posts_loc.count()
                 if p_count > 0:
-                    # Verify DOM readiness: ensure all items have populated URLs
-                    ready_count = 0
-                    lis = posts_loc.all()
-                    for li in lis:
-                        fancybox = li.locator("a.fancybox").first
-                        if fancybox.count() > 0:
-                            href = fancybox.get_attribute("href") or ""
-                            if href.startswith("http") or href.startswith("https://storage.googleapis.com") or "obj_attachment" in href:
-                                ready_count += 1
-                            elif href.startswith("#"):
-                                div_id = href.lstrip("#")
-                                rel_div = li.locator(f"div#{div_id}").first
-                                rel_url = rel_div.get_attribute("rel") if rel_div.count() > 0 else ""
-                                if rel_url and ("http" in rel_url or "storage.googleapis.com" in rel_url or "obj" in rel_url):
+                    # Check if Knockout is still in processing spinner state
+                    is_processing = page.evaluate("() => !!document.querySelector('i.fa-spinner:not([style*=\"display: none\"])')")
+                    if not is_processing or (time.time() - start_time > 4.0):
+                        # Verify DOM readiness: ensure all items have populated URLs
+                        ready_count = 0
+                        lis = posts_loc.all()
+                        for li in lis:
+                            fancybox = li.locator("a.fancybox").first
+                            if fancybox.count() > 0:
+                                href = fancybox.get_attribute("href") or ""
+                                if href.startswith("http") or href.startswith("https://storage.googleapis.com") or "obj_attachment" in href:
                                     ready_count += 1
-                    
-                    if ready_count >= p_count or (p_count > 0 and ready_count > 0 and (time.time() - start_time > 5.0)):
-                        log_fn(f"Timeframe month '{tf_text}' feed is ready: Discovered {p_count} total <li> cards ({ready_count} matching direct GCS signed URL targets).")
-                        return True
+                                elif href.startswith("#"):
+                                    div_id = href.lstrip("#")
+                                    rel_div = li.locator(f"div#{div_id}").first
+                                    rel_url = rel_div.get_attribute("rel") if rel_div.count() > 0 else ""
+                                    if rel_url and ("http" in rel_url or "storage.googleapis.com" in rel_url or "obj" in rel_url):
+                                        ready_count += 1
+                        
+                        if ready_count >= p_count or (p_count > 0 and ready_count > 0 and (time.time() - start_time > 5.0)):
+                            log_fn(f"Timeframe month '{tf_text}' feed is ready: Discovered {p_count} total <li> cards ({ready_count} matching direct GCS signed URL targets).")
+                            return True
             except Exception:
                 pass
             
@@ -369,14 +383,10 @@ def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 30
 
 def extract_feed_items(page: Page, timeframe_year: Optional[int] = None, logger: Optional[Callable[[str], None]] = None) -> List[Dict[str, Any]]:
     """
-    Extracts timeline feed items strictly scoped inside 'div.well.left-panel.pull-left' (Rule 2.B).
-    Parses direct GCS signed URLs, photo vs video background-image CSS, and overlay dates.
-
-    Returns list of dictionaries representing parsed feed items.
+    Parses media posts (photos and videos) from the active Knockout.js timeline.
+    Uses 1-batch JS evaluation fast-path with fallback to CDP locator iteration.
     """
-    if logger:
-        logger(f"Starting DOM feed item extraction for timeframe year {timeframe_year}...")
-
+    import re
     items: List[Dict[str, Any]] = []
 
     # Fast-Path: Perform 1 single in-browser JS evaluation to fetch all card attributes at once (3ms)
@@ -384,7 +394,7 @@ def extract_feed_items(page: Page, timeframe_year: Optional[int] = None, logger:
     try:
         raw_cards = page.evaluate("""
             () => {
-                const timeline = document.querySelector('div.well.left-panel.pull-left');
+                const timeline = document.querySelector('div.well.left-panel.pull-left') || document.querySelector('div.well.pull-left') || document.querySelector('div.well') || document.body;
                 if (!timeline) return null;
                 const lis = Array.from(timeline.querySelectorAll('ul.thumbnails li'));
                 return lis.map(li => {
