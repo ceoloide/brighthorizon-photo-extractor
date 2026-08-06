@@ -349,15 +349,21 @@ def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 36
             # 1-batch JS evaluation for fast readiness check (<2ms)
             status = page.evaluate("""
                 () => {
-                    const emptyH1 = document.querySelector('h1');
-                    const emptyText = emptyH1 ? (emptyH1.innerText || emptyH1.textContent || '').toLowerCase() : '';
-                    const isEmpty = emptyText.includes('no events for the month') || emptyText.includes('welcome to tadpoles') || emptyText.includes('no entries');
+                    const timeline = document.querySelector('div.well.left-panel.pull-left, div.well.pull-left') || 
+                                     Array.from(document.querySelectorAll('div.well')).find(el => !el.className.includes('pull-right')) || 
+                                     document.body;
+                    
+                    const headings = Array.from(timeline.querySelectorAll('h1, h2, h3, h4'));
+                    const isEmpty = headings.some(h => {
+                        const txt = (h.innerText || h.textContent || '').toLowerCase();
+                        return txt.includes('no events for the month');
+                    });
                     
                     const spinner = document.querySelector('i.fa-spinner');
                     const isProcessing = spinner ? (spinner.offsetParent !== null && window.getComputedStyle(spinner).display !== 'none' && window.getComputedStyle(spinner.parentElement).display !== 'none') : false;
                     
-                    const timeline = document.querySelector('div.well.left-panel.pull-left, div.well.pull-left, div.well') || document.body;
-                    const lis = Array.from(timeline.querySelectorAll('ul.thumbnails li'));
+                    // Filter out month navigation tiles (which have displayName bindings) to count only post cards
+                    const lis = Array.from(timeline.querySelectorAll('ul.thumbnails li')).filter(li => !li.querySelector('span[data-bind*="displayName"]'));
                     
                     let readyCount = 0;
                     for (const li of lis) {
@@ -386,18 +392,17 @@ def wait_for_month_feed_ready(page: Page, tf_text: str, max_wait_sec: float = 36
                 }
             """)
 
-            # Check empty month state
-            if status["isEmpty"]:
-                page.wait_for_timeout(1000)
-                if status["totalCards"] == 0:
-                    log_fn(f"Timeframe month '{tf_text}' confirmed empty ('no events for the month').")
-                    return False
-
             # Check feed readiness
             p_count = status["totalCards"]
             ready_count = status["readyCount"]
             is_processing = status["isProcessing"]
 
+            # 1. Check empty month state (empty text or 0 cards with inactive spinner)
+            if status["isEmpty"] or (not is_processing and p_count == 0 and elapsed > 3.5):
+                log_fn(f"Timeframe month '{tf_text}' confirmed empty (0 cards, spinner inactive).")
+                return False
+
+            # 2. Check feed readiness (cards populated and ready)
             if p_count > 0:
                 if not is_processing or elapsed > 15.0:
                     if ready_count >= p_count or (p_count > 0 and ready_count > 0 and elapsed > 4.0):
