@@ -379,7 +379,97 @@ def extract_feed_items(page: Page, timeframe_year: Optional[int] = None, logger:
 
     items: List[Dict[str, Any]] = []
 
-    # Rule 2.B: Scope search strictly inside left-panel timeline well
+    # Fast-Path: Perform 1 single in-browser JS evaluation to fetch all card attributes at once (3ms)
+    raw_cards = None
+    try:
+        raw_cards = page.evaluate("""
+            () => {
+                const timeline = document.querySelector('div.well.left-panel.pull-left');
+                if (!timeline) return null;
+                const lis = Array.from(timeline.querySelectorAll('ul.thumbnails li'));
+                return lis.map(li => {
+                    const fancybox = li.querySelector('a.fancybox');
+                    const href = fancybox ? (fancybox.getAttribute('href') || '') : '';
+                    const tile = li.querySelector('div.tile.pointable, div.tile');
+                    const style = tile ? (tile.getAttribute('style') || '') : '';
+                    
+                    let rel = '';
+                    if (href.startsWith('#')) {
+                        const divId = href.replace(/^#/, '');
+                        let vidDiv = null;
+                        try {
+                            vidDiv = li.querySelector(`div#${CSS.escape(divId)}`);
+                        } catch(e) {}
+                        if (!vidDiv) vidDiv = document.getElementById(divId);
+                        if (vidDiv) rel = vidDiv.getAttribute('rel') || '';
+                    }
+                    
+                    const span = li.querySelector('span.name span');
+                    const rawDateText = span ? (span.innerText || span.textContent || '').trim() : '';
+                    
+                    const footer = li.querySelector('.footer.note');
+                    const commentText = footer ? (footer.innerText || footer.textContent || '').trim() : '';
+                    
+                    return {
+                        href: href,
+                        style: style,
+                        rel: rel,
+                        rawDateText: rawDateText,
+                        commentText: commentText,
+                        hasFancybox: !!fancybox
+                    };
+                });
+            }
+        """)
+    except Exception as eval_err:
+        if logger:
+            logger(f"Fast-path JS evaluation notice: {eval_err}. Falling back to CDP locator iteration...")
+
+    if isinstance(raw_cards, list):
+        total_lis = len(raw_cards)
+        if logger:
+            logger(f"Fast-path DOM parser: Retrieved {total_lis} raw feed cards in 1 batch JS call. Processing metadata...")
+
+        for idx, card in enumerate(raw_cards):
+            if not card.get("hasFancybox") and not card.get("href"):
+                continue
+
+            raw_href = card.get("href") or ""
+            style_attr = card.get("style") or ""
+            rel_attr = card.get("rel") or ""
+
+            obj_id, is_video, resolved_url = extract_obj_id_from_url_or_style(raw_href, style_attr, rel_attr)
+            if not obj_id:
+                continue
+
+            raw_date = card.get("rawDateText") or ""
+            date_str = parse_date_overlay(raw_date, timeframe_year=timeframe_year)
+            comment_text = card.get("commentText") or ""
+
+            media_type = "video" if is_video else "photo"
+            download_url = resolved_url if resolved_url.startswith("http") else f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={obj_id}&key={obj_id}"
+
+            items.append({
+                "obj_id": obj_id,
+                "media_type": media_type,
+                "is_video": is_video,
+                "raw_href": raw_href,
+                "resolved_url": resolved_url,
+                "download_url": download_url,
+                "date_str": date_str,
+                "raw_date_text": raw_date,
+                "comment_text": comment_text,
+            })
+
+            if logger and (idx + 1) % 50 == 0:
+                logger(f"Parsing batch progress: processed {idx + 1}/{total_lis} DOM feed cards...")
+
+        if logger:
+            logger(f"DOM feed extraction finished: Discovered {total_lis} total <li> cards, extracted {len(items)} valid media items with direct GCS signed URL targets.")
+
+        return items
+
+    # Fallback Path: Locator-based iteration (for unit tests / mock objects)
     timeline = page.locator("div.well.left-panel.pull-left")
     if timeline.count() == 0:
         if logger:
@@ -388,8 +478,10 @@ def extract_feed_items(page: Page, timeframe_year: Optional[int] = None, logger:
 
     feed_lis = timeline.locator("ul.thumbnails li").all()
     total_lis = len(feed_lis)
+    if logger:
+        logger(f"CDP Locator parser: Found {total_lis} total <li> cards in timeline well. Parsing element by element...")
 
-    for li in feed_lis:
+    for idx, li in enumerate(feed_lis):
         try:
             fancybox = li.locator("a.fancybox").first
             if fancybox.count() == 0:
@@ -413,7 +505,6 @@ def extract_feed_items(page: Page, timeframe_year: Optional[int] = None, logger:
             if not obj_id:
                 continue
 
-            # Overlay date parsing
             raw_date = ""
             try:
                 overlay_span = li.locator("span.name span").first
@@ -422,7 +513,6 @@ def extract_feed_items(page: Page, timeframe_year: Optional[int] = None, logger:
                 pass
             date_str = parse_date_overlay(raw_date, timeframe_year=timeframe_year)
 
-            # Footer comment parsing
             comment_text = ""
             try:
                 footer_note = li.locator(".footer.note").first
@@ -445,6 +535,9 @@ def extract_feed_items(page: Page, timeframe_year: Optional[int] = None, logger:
                 "comment_text": comment_text,
                 "locator": li
             })
+
+            if logger and (idx + 1) % 25 == 0:
+                logger(f"Parsing batch progress: processed {idx + 1}/{total_lis} DOM feed cards...")
         except Exception:
             continue
 
