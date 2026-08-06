@@ -906,9 +906,13 @@ class ScraperJob:
                     pwd_inp_check = page.locator("input[name='password']:not(.hide), input[id='password']").first
                     if pwd_inp_check.count() == 0 or not pwd_inp_check.is_visible():
                         self.log("Submitting email step...")
-                        page.keyboard.press("Enter")
+                        btn = page.locator("button[type='submit'], button[name='action'], button:has-text('Continue'), button:has-text('Next')").first
+                        if btn.count() > 0 and btn.is_visible():
+                            btn.click()
+                        else:
+                            page.keyboard.press("Enter")
                         try:
-                            page.locator("input[name='password']:not(.hide), input[id='password'], span#error-element-username, div#error-element-username, .ulp-input-error-message").first.wait_for(state="visible", timeout=12000)
+                            page.locator("input[name='password']:not(.hide), input[id='password'], span#error-element-username, div#error-element-username, .ulp-input-error-message").first.wait_for(state="visible", timeout=15000)
                         except Exception:
                             pass
                         self.check_auth0_errors(page)
