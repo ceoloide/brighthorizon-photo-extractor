@@ -228,6 +228,44 @@ def test_cancel_archive_task_on_account_deletion():
     assert status_after["status"] == "idle"
     assert status_after["archive_id"] is None
 
+def test_archive_manifest_hash_up_to_date_detection():
+    from backend.archive_stream import compute_manifest_hash, save_archive_metadata, get_archive_status
+    from backend.database import TenantStorage
+    
+    storage = TenantStorage("hash_test_user@example.com")
+    manifest = {
+        "item1": {"obj_id": "obj1", "storage_path": "media/1.dat", "file_size": 100}
+    }
+    m_hash = compute_manifest_hash(manifest)
+    assert isinstance(m_hash, str) and len(m_hash) == 64
+    
+    # Create fake archive and meta
+    os.makedirs(storage.archives_dir, exist_ok=True)
+    zip_path = os.path.join(storage.archives_dir, "archive_test.zip")
+    with open(zip_path, "w") as f: f.write("zip_content")
+    
+    save_archive_metadata(storage.archives_dir, {
+        "archive_id": "archive_test.zip",
+        "manifest_hash": m_hash,
+        "created_at": 12345,
+        "file_size": 11
+    })
+    
+    # Mock tenant manifest load
+    storage.save_manifest(manifest)
+    
+    status = get_archive_status(storage.tenant_id, tenant_storage=storage)
+    assert status["status"] == "ready"
+    assert status["up_to_date"] is True
+    
+    # Modify manifest (add item) -> up_to_date becomes False
+    manifest["item2"] = {"obj_id": "obj2", "storage_path": "media/2.dat", "file_size": 200}
+    storage.save_manifest(manifest)
+    
+    status_updated = get_archive_status(storage.tenant_id, tenant_storage=storage)
+    assert status_updated["status"] == "ready"
+    assert status_updated["up_to_date"] is False
+
 
 
 

@@ -2,6 +2,8 @@
 # Async ZIP Archive Manager & HTTP Range Download Streamer
 import os
 import time
+import json
+import hashlib
 import zipfile
 import threading
 from typing import Dict, Any, Optional, Tuple
@@ -11,11 +13,59 @@ from backend.database import TenantStorage
 
 _archive_tasks: Dict[str, Dict[str, Any]] = {}
 
+def compute_manifest_hash(manifest: Dict[str, Any]) -> str:
+    """Computes a deterministic SHA-256 hash over the tenant's current manifest content."""
+    items = []
+    for m_id in sorted(manifest.keys()):
+        item = manifest.get(m_id, {})
+        items.append((
+            m_id,
+            item.get("obj_id", ""),
+            item.get("storage_path", ""),
+            item.get("file_size", 0)
+        ))
+    raw = json.dumps(items, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+def get_archive_metadata_path(archives_dir: str) -> str:
+    return os.path.join(archives_dir, "archive_meta.json")
+
+def save_archive_metadata(archives_dir: str, meta: Dict[str, Any]):
+    try:
+        os.makedirs(archives_dir, exist_ok=True)
+        mpath = get_archive_metadata_path(archives_dir)
+        with open(mpath, "w", encoding="utf-8") as f:
+            json.dump(meta, f)
+    except Exception as e:
+        print(f"[Archive Error] Failed to save archive metadata: {e}")
+
+def load_archive_metadata(archives_dir: str) -> Optional[Dict[str, Any]]:
+    try:
+        mpath = get_archive_metadata_path(archives_dir)
+        if os.path.exists(mpath):
+            with open(mpath, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return None
+
 def get_archive_status(tenant_id: str, tenant_storage: Optional[TenantStorage] = None) -> Dict[str, Any]:
-    """Returns current archive creation task status for a tenant, including checking on-disk archives."""
+    """Returns current archive creation task status for a tenant, including checking up_to_date status."""
+    current_manifest_hash = None
+    if tenant_storage:
+        try:
+            manifest = tenant_storage.load_manifest()
+            current_manifest_hash = compute_manifest_hash(manifest)
+        except Exception:
+            pass
+
     if tenant_id in _archive_tasks:
         res = dict(_archive_tasks[tenant_id])
         res["size"] = res.get("file_size", 0)
+        if current_manifest_hash and res.get("manifest_hash"):
+            res["up_to_date"] = (res["manifest_hash"] == current_manifest_hash)
+        else:
+            res["up_to_date"] = False
         return res
         
     if tenant_storage and os.path.exists(tenant_storage.archives_dir):
@@ -25,12 +75,17 @@ def get_archive_status(tenant_id: str, tenant_storage: Optional[TenantStorage] =
             fpath = os.path.join(tenant_storage.archives_dir, fname)
             if os.path.isfile(fpath):
                 sz = os.path.getsize(fpath)
+                meta = load_archive_metadata(tenant_storage.archives_dir)
+                archive_hash = meta.get("manifest_hash") if meta else None
+                is_up_to_date = (archive_hash == current_manifest_hash) if (archive_hash and current_manifest_hash) else False
                 return {
                     "status": "ready",
                     "progress_percent": 100.0,
                     "archive_id": fname,
                     "file_size": sz,
                     "size": sz,
+                    "manifest_hash": archive_hash,
+                    "up_to_date": is_up_to_date,
                     "created_at": int(os.path.getmtime(fpath)),
                     "error": None
                 }
@@ -41,6 +96,8 @@ def get_archive_status(tenant_id: str, tenant_storage: Optional[TenantStorage] =
         "archive_id": None,
         "file_size": 0,
         "size": 0,
+        "manifest_hash": None,
+        "up_to_date": False,
         "created_at": None,
         "error": None
     }
@@ -66,10 +123,10 @@ def cancel_archive_task(tenant_id: str):
             task_info["error"] = "Account deleted"
 
 def start_zip_task(tenant_storage: TenantStorage, layout: str = "flat") -> Dict[str, Any]:
-    """Kicks off an asynchronous ZIP archive creation task in a background thread."""
+    """Kicks off an asynchronous ZIP archive creation task in a background thread (always flat layout)."""
     tenant_id = tenant_storage.tenant_id
     
-    current_task = get_archive_status(tenant_id)
+    current_task = get_archive_status(tenant_id, tenant_storage=tenant_storage)
     if current_task["status"] == "processing":
         return current_task
     
@@ -81,6 +138,9 @@ def start_zip_task(tenant_storage: TenantStorage, layout: str = "flat") -> Dict[
         "progress_percent": 0.0,
         "archive_id": f"archive_{int(time.time())}.zip",
         "file_size": 0,
+        "size": 0,
+        "manifest_hash": None,
+        "up_to_date": False,
         "created_at": int(time.time()),
         "cancelled": False,
         "error": None
@@ -91,6 +151,8 @@ def start_zip_task(tenant_storage: TenantStorage, layout: str = "flat") -> Dict[
         try:
             manifest = tenant_storage.load_manifest()
             total_files = len(manifest)
+            manifest_hash = compute_manifest_hash(manifest)
+            
             if total_files == 0:
                 task_info["status"] = "error"
                 task_info["error"] = "No media files found to archive."
@@ -119,13 +181,7 @@ def start_zip_task(tenant_storage: TenantStorage, layout: str = "flat") -> Dict[
                     if os.path.exists(abs_src):
                         child = item.get("child", "Child")
                         orig_name = item.get("original_filename", f"{media_id}.jpg")
-                        year = item.get("year", "")
-                        month = item.get("month", "")
-                        
-                        if layout == "nested" and year and month:
-                            arcname = os.path.join(child, f"{year:04d}", f"{month:02d}", orig_name)
-                        else:
-                            arcname = os.path.join(child, orig_name)
+                        arcname = os.path.join(child, orig_name)
                             
                         # Resolve filename collisions cleanly inside ZIP
                         if arcname in used_arcnames:
@@ -144,10 +200,19 @@ def start_zip_task(tenant_storage: TenantStorage, layout: str = "flat") -> Dict[
                     except Exception: pass
                 return
             
-            task_info["status"] = "ready"
             sz = os.path.getsize(target_zip_path)
+            save_archive_metadata(tenant_storage.archives_dir, {
+                "archive_id": task_info["archive_id"],
+                "manifest_hash": manifest_hash,
+                "created_at": task_info["created_at"],
+                "file_size": sz
+            })
+            
+            task_info["status"] = "ready"
             task_info["file_size"] = sz
             task_info["size"] = sz
+            task_info["manifest_hash"] = manifest_hash
+            task_info["up_to_date"] = True
             task_info["progress_percent"] = 100.0
         except Exception as e:
             if not task_info.get("cancelled"):

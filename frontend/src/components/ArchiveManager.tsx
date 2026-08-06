@@ -6,7 +6,6 @@ interface ArchiveManagerProps {
 }
 
 export const ArchiveManager: React.FC<ArchiveManagerProps> = ({ token }) => {
-  const [layoutMode, setLayoutMode] = useState<string>('flat');
   const [status, setStatus] = useState<any>({ status: 'idle', progress_percent: 0 });
   const [loading, setLoading] = useState<boolean>(false);
 
@@ -45,7 +44,7 @@ export const ArchiveManager: React.FC<ArchiveManagerProps> = ({ token }) => {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify({ layout_mode: layoutMode })
+        body: JSON.stringify({ layout_mode: 'flat' })
       });
       const data = await res.json();
       if (res.ok) {
@@ -66,9 +65,11 @@ export const ArchiveManager: React.FC<ArchiveManagerProps> = ({ token }) => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
+  const isUpToDate = status.status === 'ready' && status.up_to_date;
+
   return (
     <div className="p-4 sm:p-6 bg-white rounded-2xl border border-slate-200 space-y-4 sm:space-y-5 shadow-sm font-sans">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="p-2 rounded-xl bg-indigo-50 border border-indigo-100 text-indigo-600 shrink-0">
             <Archive className="w-5 h-5" />
@@ -78,50 +79,25 @@ export const ArchiveManager: React.FC<ArchiveManagerProps> = ({ token }) => {
             <p className="text-xs text-slate-500 mt-0.5">Create a downloadable ZIP file of all saved photos and videos</p>
           </div>
         </div>
-      </div>
-
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-1">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
-          <label className="text-xs font-semibold uppercase tracking-wider text-slate-700">Layout Format:</label>
-          <div className="grid grid-cols-2 p-1 bg-slate-100 border border-slate-200 rounded-xl text-xs font-medium w-full sm:w-auto">
-            <button
-              type="button"
-              onClick={() => setLayoutMode('flat')}
-              disabled={status.status === 'processing'}
-              className={`px-3 py-2 sm:py-1.5 rounded-lg transition flex items-center justify-center gap-1.5 ${
-                layoutMode === 'flat'
-                  ? 'bg-white text-indigo-700 font-semibold border border-slate-200 shadow-sm'
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              <FileSpreadsheet className="w-3.5 h-3.5" />
-              <span>Flat</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setLayoutMode('nested')}
-              disabled={status.status === 'processing'}
-              className={`px-3 py-2 sm:py-1.5 rounded-lg transition flex items-center justify-center gap-1.5 ${
-                layoutMode === 'nested'
-                  ? 'bg-white text-indigo-700 font-semibold border border-slate-200 shadow-sm'
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              <FolderTree className="w-3.5 h-3.5" />
-              <span>Nested</span>
-            </button>
-          </div>
-        </div>
 
         <button
           onClick={handleCreateArchive}
-          disabled={loading || status.status === 'processing'}
-          className="w-full sm:w-auto px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition disabled:opacity-50 flex items-center justify-center gap-2 shadow-sm active:scale-[0.99]"
+          disabled={loading || status.status === 'processing' || isUpToDate}
+          className={`w-full sm:w-auto px-5 py-2.5 text-xs font-semibold rounded-xl transition flex items-center justify-center gap-2 shadow-sm active:scale-[0.99] ${
+            isUpToDate
+              ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed shadow-none'
+              : 'bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50'
+          }`}
         >
           {status.status === 'processing' ? (
             <>
               <RefreshCw className="w-4 h-4 animate-spin" />
               <span>Compressing ZIP ({status.progress_percent}%)...</span>
+            </>
+          ) : isUpToDate ? (
+            <>
+              <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+              <span>Archive Up to Date</span>
             </>
           ) : (
             <>
