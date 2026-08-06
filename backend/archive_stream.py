@@ -11,16 +11,39 @@ from backend.database import TenantStorage
 
 _archive_tasks: Dict[str, Dict[str, Any]] = {}
 
-def get_archive_status(tenant_id: str) -> Dict[str, Any]:
-    """Returns current archive creation task status for a tenant."""
-    return _archive_tasks.get(tenant_id, {
+def get_archive_status(tenant_id: str, tenant_storage: Optional[TenantStorage] = None) -> Dict[str, Any]:
+    """Returns current archive creation task status for a tenant, including checking on-disk archives."""
+    if tenant_id in _archive_tasks:
+        res = dict(_archive_tasks[tenant_id])
+        res["size"] = res.get("file_size", 0)
+        return res
+        
+    if tenant_storage and os.path.exists(tenant_storage.archives_dir):
+        zips = [f for f in os.listdir(tenant_storage.archives_dir) if f.endswith(".zip")]
+        if zips:
+            fname = zips[0]
+            fpath = os.path.join(tenant_storage.archives_dir, fname)
+            if os.path.isfile(fpath):
+                sz = os.path.getsize(fpath)
+                return {
+                    "status": "ready",
+                    "progress_percent": 100.0,
+                    "archive_id": fname,
+                    "file_size": sz,
+                    "size": sz,
+                    "created_at": int(os.path.getmtime(fpath)),
+                    "error": None
+                }
+
+    return {
         "status": "idle",
         "progress_percent": 0.0,
         "archive_id": None,
         "file_size": 0,
+        "size": 0,
         "created_at": None,
         "error": None
-    })
+    }
 
 def purge_previous_archives(archives_dir: str):
     """Purges all existing archive files for a tenant to ensure at most one archive file exists."""
@@ -122,7 +145,9 @@ def start_zip_task(tenant_storage: TenantStorage, layout: str = "flat") -> Dict[
                 return
             
             task_info["status"] = "ready"
-            task_info["file_size"] = os.path.getsize(target_zip_path)
+            sz = os.path.getsize(target_zip_path)
+            task_info["file_size"] = sz
+            task_info["size"] = sz
             task_info["progress_percent"] = 100.0
         except Exception as e:
             if not task_info.get("cancelled"):

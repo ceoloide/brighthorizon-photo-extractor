@@ -570,7 +570,7 @@ def create_archive(req: ArchiveRequest, tenant: TenantStorage = Depends(get_curr
 
 @app.get("/api/archive/status")
 def archive_status(tenant: TenantStorage = Depends(get_current_tenant)):
-    return get_archive_status(tenant.tenant_id)
+    return get_archive_status(tenant.tenant_id, tenant_storage=tenant)
 
 @app.get("/api/archive/download")
 def download_archive(request: Request, token: Optional[str] = None, authorization: Optional[str] = Header(None)):

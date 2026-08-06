@@ -58,10 +58,10 @@ export const ArchiveManager: React.FC<ArchiveManagerProps> = ({ token }) => {
     }
   };
 
-  const formatBytes = (bytes: number) => {
-    if (!bytes) return '0 B';
+  const formatBytes = (bytes?: number) => {
+    if (!bytes || isNaN(bytes) || bytes <= 0) return '0 B';
     const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
@@ -156,7 +156,7 @@ export const ArchiveManager: React.FC<ArchiveManagerProps> = ({ token }) => {
             <div>
               <p className="font-semibold text-emerald-900">Archive Ready for Download!</p>
               <p className="text-emerald-700 font-mono text-[11px]">
-                {status.archive_id} • {formatBytes(status.size)}
+                {status.archive_id} • {formatBytes(status.file_size || status.size)}
               </p>
             </div>
           </div>
