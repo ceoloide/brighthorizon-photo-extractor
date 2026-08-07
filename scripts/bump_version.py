@@ -30,7 +30,6 @@ def bump_version(part="build"):
         data = {"version": "2.1.0", "build": 0, "gitHash": "dev"}
 
     version_str = data.get("version", "2.1.0")
-    build_num = data.get("build", 0) + 1
     git_hash = get_git_hash()
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -46,6 +45,9 @@ def bump_version(part="build"):
         elif part == "patch":
             parts[2] += 1
         version_str = f"{parts[0]}.{parts[1]}.{parts[2]}"
+        build_num = 1
+    else:
+        build_num = data.get("build", 0) + 1
 
     updated_data = {
         "version": version_str,
