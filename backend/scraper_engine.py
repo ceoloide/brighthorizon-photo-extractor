@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Headless Scraper Engine for Bright Horizons Photo Extractor
+import io
 import json
 import os
 import re
@@ -8,6 +9,7 @@ import time
 import requests
 import struct
 import threading
+from PIL import Image
 import zlib
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Callable, Optional, Tuple
@@ -54,6 +56,78 @@ def capture_compressed_b64_frame(page: Page, width=1280, height=720) -> Optional
             return f"data:image/jpeg;base64,{base64.b64encode(img_bytes).decode('utf-8')}"
         except Exception:
             return None
+def check_and_refetch_if_200x200(
+    file_bytes: bytes,
+    o_id: str,
+    k_id: str,
+    req_headers: dict,
+    session_cookies: dict,
+    is_vid: bool,
+    max_retries: int = 2,
+    log_func: Optional[Callable[[str], None]] = None
+) -> Tuple[bytes, bool]:
+    """
+    Checks if downloaded image bytes have 200x200 pixel dimensions.
+    If 200x200 is detected, attempts up to `max_retries` fresh signed URL queries
+    to obtain a full-resolution asset (> 200x200).
+
+    Returns:
+        Tuple of (final_file_bytes, upgraded_flag)
+    """
+    if is_vid or not file_bytes:
+        return file_bytes, False
+
+    def _is_200x200(b: bytes) -> bool:
+        try:
+            with Image.open(io.BytesIO(b)) as img:
+                return img.width == 200 and img.height == 200
+        except Exception:
+            return False
+
+    if not _is_200x200(file_bytes):
+        return file_bytes, False
+
+    fallback_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={o_id}&key={k_id}"
+    if log_func:
+        log_func(f"[200x200 Thumbnail Warning] Asset obj_id {o_id[:8]} downloaded as 200x200px thumbnail. Attempting signed URL refetch (up to {max_retries} retries)...")
+
+    current_bytes = file_bytes
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.get(fallback_url, headers=req_headers, cookies=session_cookies, timeout=60)
+            if resp.status_code == 200:
+                fetched_bytes = None
+                try:
+                    json_data = json.loads(resp.content.decode("utf-8"))
+                    if isinstance(json_data, dict) and "signed_url" in json_data:
+                        s_url = json_data["signed_url"]
+                        s_resp = requests.get(s_url, headers={"User-Agent": req_headers.get("User-Agent", "")}, timeout=60)
+                        if s_resp.status_code == 200:
+                            fetched_bytes = s_resp.content
+                except Exception:
+                    fetched_bytes = resp.content
+
+                if fetched_bytes and not _is_200x200(fetched_bytes):
+                    w, h = "unknown", "unknown"
+                    try:
+                        with Image.open(io.BytesIO(fetched_bytes)) as new_img:
+                            w, h = new_img.width, new_img.height
+                    except Exception:
+                        pass
+
+                    if log_func:
+                        log_func(f"[Resolution Upgrade Success] Successfully retrieved full-resolution image ({w}x{h}px) for obj_id {o_id[:8]} on attempt {attempt}/{max_retries}.")
+                    return fetched_bytes, True
+
+        except Exception as err:
+            if log_func:
+                log_func(f"[Refetch Retry #{attempt}/{max_retries}] Refetch error for obj_id {o_id[:8]}: {err}")
+        time.sleep(1.0)
+
+    if log_func:
+        log_func(f"[Resolution Warning] Asset obj_id {o_id[:8]} remains 200x200px after {max_retries} retries; retaining available asset.")
+
+    return current_bytes, False
 
 def clean_user_data_locks(user_data_dir: str):
     """Safely removes stale Chromium Singleton lock files to prevent browser launch crashes."""
@@ -500,6 +574,9 @@ class ScraperJob:
                     self.status["state"] = "cancelled"
                     self.status["current_step"] = "Extraction cancelled"
                 else:
+                    # Stage 2: Post-Extraction Thumbnail Sweep (re-download 200x200 images 1 time)
+                    self._run_post_extraction_thumbnail_sweep(state_file)
+
                     self.status["state"] = "completed"
                     self.status["current_step"] = "Extraction finished successfully"
                     self.log("All extraction tasks completed successfully!")
@@ -522,6 +599,102 @@ class ScraperJob:
                 self.status["state"] = "failed"
                 self.status["error"] = str(e)
                 self.log(f"Extraction failed: {e}")
+
+    def _run_post_extraction_thumbnail_sweep(self, state_file: Optional[str] = None):
+        """
+        Stage 2 Job Sweep: Scans tenant manifest for any media assets that remain
+        200x200px on disk, and executes a 1-time re-download pass.
+        """
+        self.log("Starting final post-extraction sweep for 200x200 thumbnails...")
+        manifest = self.tenant_storage.load_manifest()
+        if not manifest:
+            return
+
+        session_cookies = {}
+        if state_file and os.path.exists(state_file):
+            try:
+                with open(state_file, "r", encoding="utf-8") as sf:
+                    st = json.load(sf)
+                    session_cookies = {c["name"]: c["value"] for c in st.get("cookies", [])}
+            except Exception:
+                pass
+
+        req_headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Referer": "https://mybrightday.brighthorizons.com/dashboard/parents.html"
+        }
+
+        items_scanned = 0
+        thumbnails_found = 0
+        upgraded_count = 0
+
+        for media_id, item in manifest.items():
+            if self._cancelled:
+                break
+
+            s_path = item.get("storage_path")
+            mime_type = item.get("mime_type", "")
+            if not s_path or s_path.endswith("_thumb.dat") or mime_type.startswith("video"):
+                continue
+
+            abs_path = os.path.join(self.tenant_storage.tenant_dir, s_path)
+            if not os.path.exists(abs_path):
+                continue
+
+            items_scanned += 1
+            file_bytes = None
+            try:
+                with open(abs_path, "rb") as f:
+                    file_bytes = f.read()
+            except Exception:
+                continue
+
+            if not file_bytes:
+                continue
+
+            is_200 = False
+            try:
+                with Image.open(io.BytesIO(file_bytes)) as img:
+                    is_200 = (img.width == 200 and img.height == 200)
+            except Exception:
+                pass
+
+            if not is_200:
+                continue
+
+            thumbnails_found += 1
+            obj_id = item.get("obj_id") or media_id
+            filename = item.get("original_filename") or os.path.basename(s_path)
+            self.log(f"[Post-Extraction Sweep] Identified 200x200 thumbnail for '{filename}' ({media_id[:8]}). Executing 1-time re-download pass...")
+
+            new_bytes, upgraded = check_and_refetch_if_200x200(
+                file_bytes=file_bytes,
+                o_id=obj_id,
+                k_id=obj_id,
+                req_headers=req_headers,
+                session_cookies=session_cookies,
+                is_vid=False,
+                max_retries=1,
+                log_func=self.log
+            )
+
+            if upgraded and new_bytes:
+                upgraded_count += 1
+                try:
+                    self.tenant_storage.add_media_entry(
+                        obj_id=obj_id,
+                        child=item.get("child", "Child"),
+                        date_str=item.get("date", datetime.now().strftime("%Y-%m-%d")),
+                        original_filename=filename,
+                        comment=item.get("comment", ""),
+                        file_bytes=new_bytes,
+                        mime_type=mime_type
+                    )
+                    set_eastern_timestamp(abs_path, item.get("date", datetime.now().strftime("%Y-%m-%d")))
+                except Exception as save_err:
+                    self.log(f"[Post-Extraction Sweep Notice] Error updating asset for '{filename}': {save_err}")
+
+        self.log(f"[Post-Extraction Sweep Complete] Scanned {items_scanned} images; identified {thumbnails_found} 200x200 thumbnails; upgraded {upgraded_count} assets to full resolution.")
 
     def detect_page_state(self, page: Page, max_wait_sec: int = 35) -> str:
         """
@@ -1610,6 +1783,18 @@ class ScraperJob:
 
                 if not file_bytes:
                     return False
+
+                # Stage 1: In-Flight 200x200 Thumbnail Check & Refetch (up to 2 retries)
+                file_bytes, _ = check_and_refetch_if_200x200(
+                    file_bytes=file_bytes,
+                    o_id=o_id,
+                    k_id=k_id,
+                    req_headers=req_headers,
+                    session_cookies=session_cookies,
+                    is_vid=is_vid,
+                    max_retries=2,
+                    log_func=self.log
+                )
 
                 # Detect true file extension via binary magic bytes inspection
                 ext = detect_extension(file_bytes, mime_type)
