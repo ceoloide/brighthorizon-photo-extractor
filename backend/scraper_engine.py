@@ -56,7 +56,7 @@ def capture_compressed_b64_frame(page: Page, width=1280, height=720) -> Optional
             return f"data:image/jpeg;base64,{base64.b64encode(img_bytes).decode('utf-8')}"
         except Exception:
             return None
-def check_and_refetch_if_200x200(
+def check_and_refetch_asset(
     file_bytes: bytes,
     o_id: str,
     k_id: str,
@@ -67,29 +67,53 @@ def check_and_refetch_if_200x200(
     log_func: Optional[Callable[[str], None]] = None
 ) -> Tuple[bytes, bool]:
     """
-    Checks if downloaded image bytes have 200x200 pixel dimensions.
-    If 200x200 is detected, attempts up to `max_retries` fresh signed URL queries
-    to obtain a full-resolution asset (> 200x200).
+    Checks if downloaded media payload is sub-optimal:
+    - Photo (`is_vid=False`): checks if payload is 200x200px thumbnail.
+    - Video (`is_vid=True`): checks if payload fell back to JPEG image format.
+
+    If sub-optimal, attempts up to `max_retries` fresh signed URL queries to obtain
+    a full-resolution image (> 200x200) or true MP4 video stream.
 
     Returns:
         Tuple of (final_file_bytes, upgraded_flag)
     """
-    if is_vid or not file_bytes:
+    if not file_bytes:
         return file_bytes, False
 
-    def _is_200x200(b: bytes) -> bool:
+    def _is_200x200_photo(b: bytes) -> bool:
         try:
             with Image.open(io.BytesIO(b)) as img:
                 return img.width == 200 and img.height == 200
         except Exception:
             return False
 
-    if not _is_200x200(file_bytes):
+    def _is_video_jpeg_fallback(b: bytes) -> bool:
+        if b.startswith(b"\xff\xd8"):
+            return True
+        try:
+            with Image.open(io.BytesIO(b)):
+                return True
+        except Exception:
+            return False
+
+    needs_refetch = False
+    refetch_reason = ""
+
+    if is_vid:
+        if _is_video_jpeg_fallback(file_bytes):
+            needs_refetch = True
+            refetch_reason = "Video payload fell back to JPEG image thumbnail"
+    else:
+        if _is_200x200_photo(file_bytes):
+            needs_refetch = True
+            refetch_reason = "Photo downloaded as 200x200px thumbnail"
+
+    if not needs_refetch:
         return file_bytes, False
 
     fallback_url = f"https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj={o_id}&key={k_id}"
     if log_func:
-        log_func(f"[200x200 Thumbnail Warning] Asset obj_id {o_id[:8]} downloaded as 200x200px thumbnail. Attempting signed URL refetch (up to {max_retries} retries)...")
+        log_func(f"[{'Video' if is_vid else 'Photo'} Remediation Warning] {refetch_reason} for obj_id {o_id[:8]}. Attempting signed URL refetch (up to {max_retries} retries)...")
 
     current_bytes = file_bytes
     for attempt in range(1, max_retries + 1):
@@ -107,17 +131,23 @@ def check_and_refetch_if_200x200(
                 except Exception:
                     fetched_bytes = resp.content
 
-                if fetched_bytes and not _is_200x200(fetched_bytes):
-                    w, h = "unknown", "unknown"
-                    try:
-                        with Image.open(io.BytesIO(fetched_bytes)) as new_img:
-                            w, h = new_img.width, new_img.height
-                    except Exception:
-                        pass
-
-                    if log_func:
-                        log_func(f"[Resolution Upgrade Success] Successfully retrieved full-resolution image ({w}x{h}px) for obj_id {o_id[:8]} on attempt {attempt}/{max_retries}.")
-                    return fetched_bytes, True
+                if fetched_bytes:
+                    if is_vid:
+                        if not _is_video_jpeg_fallback(fetched_bytes):
+                            if log_func:
+                                log_func(f"[Video Stream Upgrade Success] Successfully retrieved full video stream ({len(fetched_bytes)} bytes) for obj_id {o_id[:8]} on attempt {attempt}/{max_retries}.")
+                            return fetched_bytes, True
+                    else:
+                        if not _is_200x200_photo(fetched_bytes):
+                            w, h = "unknown", "unknown"
+                            try:
+                                with Image.open(io.BytesIO(fetched_bytes)) as new_img:
+                                    w, h = new_img.width, new_img.height
+                            except Exception:
+                                pass
+                            if log_func:
+                                log_func(f"[Resolution Upgrade Success] Successfully retrieved full-resolution image ({w}x{h}px) for obj_id {o_id[:8]} on attempt {attempt}/{max_retries}.")
+                            return fetched_bytes, True
 
         except Exception as err:
             if log_func:
@@ -125,9 +155,11 @@ def check_and_refetch_if_200x200(
         time.sleep(1.0)
 
     if log_func:
-        log_func(f"[Resolution Warning] Asset obj_id {o_id[:8]} remains 200x200px after {max_retries} retries; retaining available asset.")
+        log_func(f"[Remediation Notice] Asset obj_id {o_id[:8]} remains un-upgraded after {max_retries} retries; retaining existing payload.")
 
     return current_bytes, False
+
+check_and_refetch_if_200x200 = check_and_refetch_asset
 
 def clean_user_data_locks(user_data_dir: str):
     """Safely removes stale Chromium Singleton lock files to prevent browser launch crashes."""

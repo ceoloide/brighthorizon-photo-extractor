@@ -29,8 +29,8 @@ def test_check_and_refetch_non_200_image():
     assert out_bytes == data_bytes
 
 def test_check_and_refetch_video():
-    """Videos should skip image dimension checks."""
-    data_bytes = b"fake_video_payload"
+    """Valid video payload should pass through without refetching."""
+    data_bytes = b"ftypisom_valid_mp4_bytes"
     out_bytes, upgraded = check_and_refetch_if_200x200(
         file_bytes=data_bytes,
         o_id="test_obj",
@@ -41,6 +41,38 @@ def test_check_and_refetch_video():
     )
     assert upgraded is False
     assert out_bytes == data_bytes
+
+@patch("requests.get")
+def test_check_and_refetch_video_jpeg_fallback(mock_get):
+    """Video payload returning JPEG image should trigger signed URL refetch and return MP4 bytes if upgraded."""
+    jpeg_bytes = create_dummy_image_bytes(200, 200)
+    video_bytes = b"ftypisom_real_video_payload"
+
+    mock_resp_json = MagicMock()
+    mock_resp_json.status_code = 200
+    mock_resp_json.content = json.dumps({"signed_url": "https://storage.googleapis.com/video.mp4"}).encode("utf-8")
+
+    mock_resp_gcs = MagicMock()
+    mock_resp_gcs.status_code = 200
+    mock_resp_gcs.content = video_bytes
+
+    mock_get.side_effect = [mock_resp_json, mock_resp_gcs]
+
+    logs = []
+    out_bytes, upgraded = check_and_refetch_if_200x200(
+        file_bytes=jpeg_bytes,
+        o_id="vid_123",
+        k_id="key_123",
+        req_headers={"User-Agent": "Test"},
+        session_cookies={},
+        is_vid=True,
+        max_retries=2,
+        log_func=logs.append
+    )
+
+    assert upgraded is True
+    assert out_bytes == video_bytes
+    assert any("Video Stream Upgrade Success" in l for l in logs)
 
 @patch("requests.get")
 def test_check_and_refetch_200x200_upgrade_success(mock_get):
@@ -103,7 +135,7 @@ def test_check_and_refetch_200x200_remains_200(mock_get):
 
     assert upgraded is False
     assert out_bytes == thumb_bytes
-    assert any("Resolution Warning" in l for l in logs)
+    assert any("Remediation Notice" in l or "remains" in l for l in logs)
 
 @patch("backend.scraper_engine.check_and_refetch_if_200x200")
 def test_post_extraction_thumbnail_sweep(mock_refetch, tmp_path):
