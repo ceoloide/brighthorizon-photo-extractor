@@ -313,9 +313,8 @@ class NetworkTraceLogger:
                                 redacted_cookies.append(f"{name}=[REDACTED]")
                 details["set_cookies"] = redacted_cookies
 
-            level = "DEBUG" if status < 400 else ("WARN" if status < 500 else "ERROR")
             self.job.log_structured(
-                level=level,
+                level="DEBUG",
                 category="NETWORK_RESP",
                 message=f"<-- HTTP {status} {url}",
                 details=details
@@ -326,7 +325,7 @@ class NetworkTraceLogger:
         if any(domain in url for domain in ["brighthorizons", "auth0", "cloudflare", "obj_attachment"]):
             failure = request.failure
             self.job.log_structured(
-                level="ERROR",
+                level="DEBUG",
                 category="NETWORK_FAIL",
                 message=f"X-- FAILED {request.method} {url} | Error: {failure}",
                 details={"url": url, "failure": failure}
@@ -403,16 +402,26 @@ class ScraperJob:
     def log_structured(self, level: str, category: str, message: str, details: Optional[Dict[str, Any]] = None):
         """Structured logging method storing log messages, appending to persistent disk log, and calling log_callback."""
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        entry_str = f"[{timestamp}] [{level}] [{category}] {message}"
+        level_norm = level.upper()
+
+        # Force all Network activity (requests, responses, failures, warnings) to DEBUG level
+        if category.startswith("NETWORK"):
+            level_norm = "DEBUG"
+
+        entry_str = f"[{timestamp}] [{level_norm}] [{category}] {message}"
         
-        self.status["logs"].append(entry_str)
-        if len(self.status["logs"]) > 5000:
-            self.status["logs"].pop(0)
-            
+        # Persistent disk log receives all logs (including DEBUG network requests)
         self.tenant_storage.append_log(entry_str)
 
-        if self.log_callback:
-            self.log_callback(entry_str)
+        # UI console logs (self.status["logs"]) receive INFO, WARN, and ERROR engine logs,
+        # but filter out DEBUG network logs so network traffic is not surfaced on the UI
+        if level_norm != "DEBUG":
+            self.status["logs"].append(entry_str)
+            if len(self.status["logs"]) > 5000:
+                self.status["logs"].pop(0)
+                
+            if self.log_callback:
+                self.log_callback(entry_str)
 
     def log(self, message: str):
         self.log_structured("INFO", "GENERAL", message)
@@ -571,30 +580,33 @@ class ScraperJob:
 
                 if not all_children:
                     self.status["current_step"] = "Discovering enrolled children"
+                    self.log("Enrolled children list is empty; executing automatic child rediscovery step...")
                     try:
-                        self.log("Attempting child auto-discovery on Family Info Center...")
                         page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
                         time.sleep(3.0)
-                        all_children = self.discover_children(page, context)
+                        rediscovered = self.discover_children(page, context)
+                        if rediscovered:
+                            all_children = rediscovered
+                            config["children"] = all_children
+                            self.tenant_storage.save_config(config)
+                            self.log(f"Child rediscovery successful! Found and saved {len(all_children)} profile(s): {[c['name'] for c in all_children]}")
+                        else:
+                            self.log("Child rediscovery step completed with 0 profiles found; extracting timeline feed directly.")
                     except Exception as disc_err:
-                        self.log(f"Child auto-discovery on Family Info Center skipped: {disc_err}")
+                        self.log(f"Child rediscovery step notice: {disc_err}")
 
-                if not all_children:
-                    all_children = [
-                        {"name": "Byron", "dependent_id": "673e065a9d37c9fab2483b2d"},
-                        {"name": "Catherine", "dependent_id": "6322019106aa0d39b230f4a0"}
-                    ]
+                children_to_process = all_children if all_children else [{"name": "Timeline", "dependent_id": "all"}]
 
                 if self.target_child != "all":
                     target_clean = self.target_child.strip().lower()
-                    matching = [c for c in all_children if c.get("name", "").strip().lower() == target_clean or c.get("name", "").strip().lower().startswith(target_clean)]
+                    matching = [c for c in children_to_process if c.get("name", "").strip().lower() == target_clean or c.get("name", "").strip().lower().startswith(target_clean)]
                     if matching:
                         children = matching
                         self.log(f"Target child '{matching[0]['name']}' selected. Processing single child feed directly.")
                     else:
                         raise Exception(f"Selected target child '{self.target_child}' was not found among enrolled children.")
                 else:
-                    children = all_children
+                    children = children_to_process
 
                 # Step 3: Extract feed for children
                 self.status["current_step"] = "Extracting photos & videos"
@@ -607,7 +619,10 @@ class ScraperJob:
                     self.status["current_step"] = "Extraction cancelled"
                 else:
                     # Stage 2: Post-Extraction Thumbnail Sweep (re-download 200x200 images 1 time)
-                    self._run_post_extraction_thumbnail_sweep(state_file)
+                    if self.status.get("files_downloaded", 0) > 0:
+                        self._run_post_extraction_thumbnail_sweep(state_file)
+                    else:
+                        self.log("Skipping post-extraction thumbnail sweep (0 files downloaded in this extraction run).")
 
                     self.status["state"] = "completed"
                     self.status["current_step"] = "Extraction finished successfully"
@@ -1399,8 +1414,7 @@ class ScraperJob:
                     children = config.get("children", [])
                     
                 if not children:
-                    update_progress("Verification failed: No child profiles found.", 3, page=page, force_shot=True)
-                    raise Exception("Authentication succeeded, but no active child profiles were discovered for this account.")
+                    self.log("No specific child profiles discovered during verification check; proceeding with general timeline configuration.")
 
                 # Save authenticated storage state to disk
                 state_file = os.path.join(user_data_dir, "storage_state.json")
@@ -1435,79 +1449,16 @@ class ScraperJob:
 
     def discover_children(self, page: Page, context: BrowserContext) -> List[Dict[str, str]]:
         """Discovers active children and their dependent_ids following Angular CDK rules in .agents/AGENTS.md."""
-        children = []
         try:
-            self.log("Navigating to Family Information Center home to discover child cards...")
-            page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
-            try:
-                page.wait_for_selector("span:has-text('Actions'), h1", timeout=25000)
-            except Exception:
-                pass
-            page.wait_for_timeout(3000)
-            
-            # Find all Actions menu triggers
-            actions_spans = page.locator("span", has_text="Actions").all()
-            self.log(f"Found {len(actions_spans)} 'Actions' buttons on child cards.")
-            
-            for idx, span in enumerate(actions_spans):
-                try:
-                    # Get child name from h1 in parent card
-                    card_name = span.evaluate("""(el) => {
-                        let current = el;
-                        while (current && current.tagName !== 'BODY') {
-                            let h1 = current.querySelector('h1');
-                            if (h1 && h1.textContent.trim()) return h1.textContent.trim();
-                            current = current.parentElement;
-                        }
-                        return '';
-                    }""")
-                    
-                    if not card_name:
-                        continue
-                        
-                    given_name = card_name.split()[0].capitalize()
-                    
-                    # Click Actions span to open CDK overlay
-                    span.click()
-                    page.wait_for_timeout(1500)
-                    
-                    # Target specific dropdown item
-                    mbd = page.locator("span.actions-menu-item-label", has_text="My Bright Day").first
-                    try:
-                        mbd.wait_for(state="visible", timeout=3000)
-                        with context.expect_page() as new_page_info:
-                            mbd.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
-                            
-                        new_page = new_page_info.value
-                        new_page.wait_for_load_state("domcontentloaded", timeout=12000)
-                        
-                        m = re.search(r'dependent_id=([^&]+)', new_page.url)
-                        if m:
-                            dep_id = m.group(1)
-                            children.append({"name": given_name, "dependent_id": dep_id})
-                            self.log(f"Discovered child: {given_name} (dependent_id: {dep_id[:8]}...)")
-                            
-                        new_page.close()
-                    finally:
-                        # Close CDK overlay menu if open before processing next card
-                        try: page.keyboard.press("Escape")
-                        except Exception: pass
-                        page.wait_for_timeout(500)
-                except Exception as e:
-                    self.log(f"Skipped child card #{idx + 1} (may not have active enrollment): {e}")
-                    
+            from backend.dom_parser import discover_children_from_family_info
+            discovered = discover_children_from_family_info(page, context, logger=self.log)
+            if discovered:
+                return discovered
         except Exception as e:
-            self.log(f"Child auto-discovery warning: {e}")
-            
-        if not children:
-            # Fallback to default child profiles if Angular CDK rendering was slow
-            self.log("Applying default child profiles fallback (Byron & Catherine)...")
-            children = [
-                {"name": "Byron", "dependent_id": "673e065a9d37c9fab2483b2d"},
-                {"name": "Catherine", "dependent_id": "6322019106aa0d39b230f4a0"}
-            ]
-            
-        return children
+            self.log(f"Child auto-discovery via dom_parser notice: {e}")
+
+        self.log("Child auto-discovery completed: 0 specific child profiles found.")
+        return []
 
     def extract_child_feed(self, page: Page, context: BrowserContext, child: Dict[str, str]):
         """Navigates child timeline, handles timeframe links, and extracts all feed items."""

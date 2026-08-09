@@ -397,11 +397,11 @@ class MultiTenantOrchestrator:
                 self.logger(f"Target child '{target_child}' not matched in auto-discovery. Creating direct job.")
                 target_children = [{"name": target_child, "dependent_id": "default"}]
         else:
-            target_children = discovered if discovered else [{"name": "Byron", "dependent_id": "default"}]
+            target_children = discovered if discovered else [{"name": "Timeline", "dependent_id": "all"}]
 
         for child in target_children:
             self.submit_job(
-                child_name=child.get("name", target_child or "Byron"),
+                child_name=child.get("name", target_child or "Timeline"),
                 dependent_id=child.get("dependent_id", "default"),
                 user_data_dir=src_user_data,
                 output_dir=src_output,

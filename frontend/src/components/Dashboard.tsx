@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Play, RefreshCw, LogOut, CheckCircle2, AlertTriangle, Terminal, Camera, Shield, FileSpreadsheet, FolderTree, Trash2, AlertCircle, Copy, Check, Monitor, Download } from 'lucide-react';
+import { Play, RefreshCw, LogOut, CheckCircle2, AlertTriangle, Terminal, Camera, Shield, ShieldCheck, FileSpreadsheet, FolderTree, Trash2, AlertCircle, Copy, Check, Monitor, Download } from 'lucide-react';
 import { Gallery } from './Gallery';
 import { ArchiveManager } from './ArchiveManager';
 
@@ -29,6 +29,39 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
   const [deleting, setDeleting] = useState<boolean>(false);
   const [cancelling, setCancelling] = useState<boolean>(false);
   const [starting, setStarting] = useState<boolean>(false);
+  const [mfaCode, setMfaCode] = useState<string>('');
+  const [mfaSubmitting, setMfaSubmitting] = useState<boolean>(false);
+  const [mfaError, setMfaError] = useState<string | null>(null);
+
+  const handleSubmitMfaCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (mfaCode.length !== 6 || !/^\d+$/.test(mfaCode)) {
+      setMfaError('Please enter a valid 6-digit verification code.');
+      return;
+    }
+    setMfaSubmitting(true);
+    setMfaError(null);
+    try {
+      const res = await fetch('/api/auth/submit-mfa-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, code: mfaCode })
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.detail || 'Failed to submit verification code.');
+      }
+      setStatus((prev: any) => ({
+        ...prev,
+        state: 'running',
+        current_step: 'Submitting verification code to Bright Horizons...'
+      }));
+      setMfaCode('');
+    } catch (err: any) {
+      setMfaError(err.message || 'Failed to submit code.');
+      setMfaSubmitting(false);
+    }
+  };
 
   const handleSignOutClick = () => {
     if (status.state === 'running') {
@@ -546,12 +579,66 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
           {/* Status Alert & Progress Console */}
           {status.state !== 'idle' && (
             <div className="p-3.5 sm:p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+              {/* MFA Code Submission Interstitial Card */}
+              {status.state === 'mfa_required' && (
+                <form
+                  onSubmit={handleSubmitMfaCode}
+                  className="p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-3 shadow-sm mb-3"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-amber-100 border border-amber-200 flex items-center justify-center text-amber-700 shrink-0 mt-0.5">
+                      <ShieldCheck className="w-4 h-4" />
+                    </div>
+                    <div className="space-y-1">
+                      <h4 className="text-xs font-bold text-amber-950 uppercase tracking-wider">Email Verification Code Required</h4>
+                      <p className="text-xs text-amber-800 leading-relaxed">
+                        Bright Horizons sent a 6-digit verification code to <span className="font-semibold">{email}</span>. Enter it below to authorize this extraction run.
+                      </p>
+                    </div>
+                  </div>
+
+                  {mfaError && (
+                    <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 font-medium">
+                      {mfaError}
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2.5 pt-1">
+                    <input
+                      type="text"
+                      maxLength={6}
+                      placeholder="123456"
+                      value={mfaCode}
+                      onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ''))}
+                      disabled={mfaSubmitting}
+                      className="w-36 bg-white border border-amber-300 focus:border-amber-600 rounded-lg px-3 py-2 text-center text-base font-mono tracking-widest text-amber-950 font-bold outline-none shadow-inner"
+                      autoFocus
+                    />
+                    <button
+                      type="submit"
+                      disabled={mfaSubmitting || mfaCode.length !== 6}
+                      className="px-4 py-2 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 disabled:opacity-50 text-white font-semibold text-xs rounded-lg transition shadow-sm flex items-center gap-1.5"
+                    >
+                      {mfaSubmitting ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          <span>Verifying...</span>
+                        </>
+                      ) : (
+                        <span>Verify & Continue</span>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              )}
+
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                 <div className="flex items-center gap-2">
                   {status.state === 'running' && <RefreshCw className="w-4 h-4 text-indigo-600 animate-spin shrink-0" />}
+                  {status.state === 'mfa_required' && <ShieldCheck className="w-4 h-4 text-amber-600 shrink-0" />}
                   {status.state === 'completed' && <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />}
                   {status.state === 'failed' && <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />}
-                  <span className="font-semibold text-slate-900 capitalize">{status.state}</span>
+                  <span className="font-semibold text-slate-900 capitalize">{status.state === 'mfa_required' ? 'MFA Verification Required' : status.state}</span>
                   <span className="text-slate-500 font-mono text-[11px] truncate max-w-[160px] sm:max-w-none">
                     • {status.current_step}
                   </span>

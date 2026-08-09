@@ -209,9 +209,13 @@ export const VerificationInterstitial: React.FC<VerificationInterstitialProps> =
                   const errData = await res.json();
                   throw new Error(errData.detail || 'Failed to submit verification code.');
                 }
+                setStatus((prev: any) => ({
+                  ...prev,
+                  status: 'running',
+                  step: 'Submitting verification code to Bright Horizons...'
+                }));
               } catch (err: any) {
                 setMfaError(err.message || 'Failed to submit code.');
-              } finally {
                 setMfaSubmitting(false);
               }
             }}
