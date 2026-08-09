@@ -733,27 +733,43 @@ def discover_children_from_family_info(page: Page, context: BrowserContext, logg
 
     page.wait_for_timeout(1000)
     cards = page.locator("app-child").all()
+    log(f"Found {len(cards)} child card(s) (<app-child>) on portal home.")
 
     for idx, card in enumerate(cards):
         try:
+            dismiss_cdk_overlays(page)
+            try:
+                card.scroll_into_view_if_needed(timeout=3000)
+            except Exception:
+                pass
+
             title_el = card.locator("div.card-title h1").first
             try:
-                title_el.wait_for(state="visible", timeout=2000)
+                title_el.wait_for(state="visible", timeout=3000)
             except Exception:
+                log(f"Card #{idx + 1} h1 title element not visible. Skipping.")
                 continue
 
             full_name = title_el.inner_text().strip()
             if not full_name:
+                log(f"Card #{idx + 1} has empty title text. Skipping.")
                 continue
 
             given_name = full_name.split()[0].capitalize()
+            log(f"Inspecting child card #{idx + 1} of {len(cards)}: '{full_name}' (Given: '{given_name}')...")
 
-            actions_trigger = card.locator("a.mat-mdc-menu-trigger, a:has-text('Actions'), span:has-text('Actions')").first
+            actions_trigger = card.locator("a.mat-mdc-menu-trigger, a:has-text('Actions'), span:has-text('Actions'), button:has-text('Actions')").first
             if not actions_trigger:
+                log(f"Card '{given_name}' has no Actions trigger found. Skipping.")
                 continue
 
+            try:
+                actions_trigger.scroll_into_view_if_needed(timeout=2000)
+            except Exception:
+                pass
+
             actions_trigger.click()
-            page.wait_for_timeout(800)
+            page.wait_for_timeout(1000)
 
             mbd_item = page.locator("span.actions-menu-item-label", has_text="My Bright Day").first
             try:
@@ -773,17 +789,24 @@ def discover_children_from_family_info(page: Page, context: BrowserContext, logg
             match = re.search(r'dependent_id=([^&]+)', new_page.url)
             if match:
                 dep_id = match.group(1)
-                children.append({
+                child_profile = {
                     "name": given_name,
                     "given_name": given_name,
                     "full_name": full_name,
                     "dependent_id": dep_id
-                })
-                log(f"Discovered child: {given_name} (dependent_id: {dep_id})")
+                }
+                children.append(child_profile)
+                log(f"Discovered active child #{len(children)}: {given_name} (dependent_id: {dep_id[:8]}...)")
 
-            new_page.close()
+            try:
+                new_page.close()
+            except Exception:
+                pass
+
+            dismiss_cdk_overlays(page)
         except Exception as err:
-            log(f"Error discovering child #{idx + 1}: {err}")
+            log(f"Notice inspecting child card #{idx + 1}: {err}")
             dismiss_cdk_overlays(page)
 
+    log(f"Child discovery complete. Total active child profiles found: {len(children)}")
     return children
