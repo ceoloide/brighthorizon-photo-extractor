@@ -723,15 +723,15 @@ def discover_children_from_family_info(page: Page, context: BrowserContext, logg
     log = logger or (lambda msg: None)
     children: List[Dict[str, str]] = []
 
-    if "familyinfocenter.brighthorizons.com" not in page.url:
+    if "familyinfocenter.brighthorizons.com/home" not in page.url:
         page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
 
     try:
-        page.wait_for_selector("span:has-text('Actions')", timeout=15000)
+        page.wait_for_selector("app-child, span:has-text('Actions')", timeout=20000, state="attached")
     except Exception:
         pass
 
-    page.wait_for_timeout(1000)
+    page.wait_for_timeout(2000)
 
     # Strategy A: app-child elements
     cards = page.locator("app-child").all()
