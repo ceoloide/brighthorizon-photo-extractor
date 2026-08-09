@@ -714,9 +714,9 @@ def discover_children_from_family_info(page: Page, context: BrowserContext, logg
     """
     Discovers enrolled children and dependent_ids following Rule 5 (Angular CDK overlay parsing).
 
-    Navigates to familyinfocenter.brighthorizons.com/home, clicks 'Actions' span triggers,
-    clicks 'My Bright Day' menu item inside Angular CDK overlay container, and captures the
-    new tab context to extract dependent_id from the URL.
+    Navigates to familyinfocenter.brighthorizons.com/home, targets app-child elements,
+    extracts full child names from div.card-title h1, clicks the Actions trigger,
+    and captures the dependent_id from the My Bright Day tab URL.
 
     Returns list of child profiles: [{'name': 'Byron', 'given_name': 'Byron', 'full_name': '...', 'dependent_id': '...'}, ...]
     """
@@ -727,34 +727,32 @@ def discover_children_from_family_info(page: Page, context: BrowserContext, logg
         page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
 
     try:
-        page.wait_for_selector("span:has-text('Actions')", timeout=15000)
+        page.wait_for_selector("app-child", timeout=15000)
     except Exception:
         pass
 
     page.wait_for_timeout(1000)
-    actions_spans = page.locator("span", has_text="Actions").all()
+    cards = page.locator("app-child").all()
 
-    for idx, span in enumerate(actions_spans):
+    for idx, card in enumerate(cards):
         try:
-            card_name = span.evaluate("""(el) => {
-                let card = el.closest('.card, .child-card, [class*="card"], article, section');
-                if (card) {
-                    let titleEl = card.querySelector('div.card-title h1, .card-title h1, div.card-title, h1, h2, h3, [class*="title"], [class*="name"]');
-                    if (titleEl && titleEl.textContent.trim()) return titleEl.textContent.trim();
-                }
-                let current = el;
-                while (current && current.tagName !== 'BODY') {
-                    let heading = current.querySelector('div.card-title h1, .card-title h1, div.card-title, h1, h2, h3, [class*="title"], [class*="name"]');
-                    if (heading && heading.textContent.trim()) return heading.textContent.trim();
-                    current = current.parentElement;
-                }
-                return '';
-            }""")
+            title_el = card.locator("div.card-title h1").first
+            try:
+                title_el.wait_for(state="visible", timeout=2000)
+            except Exception:
+                continue
 
-            full_name = card_name.strip() if card_name else f"Child {idx + 1}"
-            given_name = full_name.split()[0].capitalize() if full_name else f"Child_{idx + 1}"
+            full_name = title_el.inner_text().strip()
+            if not full_name:
+                continue
 
-            span.click()
+            given_name = full_name.split()[0].capitalize()
+
+            actions_trigger = card.locator("a.mat-mdc-menu-trigger, a:has-text('Actions'), span:has-text('Actions')").first
+            if not actions_trigger:
+                continue
+
+            actions_trigger.click()
             page.wait_for_timeout(800)
 
             mbd_item = page.locator("span.actions-menu-item-label", has_text="My Bright Day").first

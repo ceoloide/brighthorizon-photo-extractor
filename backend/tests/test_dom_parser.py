@@ -165,9 +165,24 @@ def test_discover_children_from_family_info_mock():
     mock_context = MagicMock()
     mock_page.url = "https://familyinfocenter.brighthorizons.com/home"
 
-    mock_span = MagicMock()
-    mock_span.evaluate.return_value = "Byron Taccani Massarelli"
-    mock_page.locator.return_value.all.return_value = [mock_span]
+    mock_card = MagicMock()
+    mock_title_locator = MagicMock()
+    mock_title_locator.inner_text.return_value = "Byron Taccani Massarelli"
+    mock_title_locator.wait_for.return_value = None
+    
+    mock_trigger_locator = MagicMock()
+    
+    def mock_card_locator(selector, **kwargs):
+        mock_loc = MagicMock()
+        if "card-title" in selector:
+            mock_loc.first = mock_title_locator
+        else:
+            mock_loc.first = mock_trigger_locator
+        return mock_loc
+
+    mock_card.locator.side_effect = mock_card_locator
+
+    mock_page.locator.return_value.all.return_value = [mock_card]
 
     mock_mbd_item = MagicMock()
     mock_mbd_item.wait_for.return_value = None
