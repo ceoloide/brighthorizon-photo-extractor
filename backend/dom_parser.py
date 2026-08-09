@@ -737,20 +737,22 @@ def discover_children_from_family_info(page: Page, context: BrowserContext, logg
     for idx, span in enumerate(actions_spans):
         try:
             card_name = span.evaluate("""(el) => {
+                let card = el.closest('.card, .child-card, [class*="card"], article, section');
+                if (card) {
+                    let titleEl = card.querySelector('div.card-title h1, .card-title h1, div.card-title, h1, h2, h3, [class*="title"], [class*="name"]');
+                    if (titleEl && titleEl.textContent.trim()) return titleEl.textContent.trim();
+                }
                 let current = el;
                 while (current && current.tagName !== 'BODY') {
-                    let h1 = current.querySelector('h1');
-                    if (h1 && h1.textContent.trim()) return h1.textContent.trim();
+                    let heading = current.querySelector('div.card-title h1, .card-title h1, div.card-title, h1, h2, h3, [class*="title"], [class*="name"]');
+                    if (heading && heading.textContent.trim()) return heading.textContent.trim();
                     current = current.parentElement;
                 }
                 return '';
             }""")
 
-            if not card_name:
-                continue
-
-            full_name = card_name.strip()
-            given_name = full_name.split()[0].capitalize()
+            full_name = card_name.strip() if card_name else f"Child {idx + 1}"
+            given_name = full_name.split()[0].capitalize() if full_name else f"Child_{idx + 1}"
 
             span.click()
             page.wait_for_timeout(800)
