@@ -1410,11 +1410,8 @@ class ScraperJob:
                 # Step 2: Auto-discover children
                 children = self.discover_children(page, context)
                 if not children:
-                    config = self.tenant_storage.load_config()
-                    children = config.get("children", [])
-                    
-                if not children:
-                    self.log("No specific child profiles discovered during verification check; proceeding with general timeline configuration.")
+                    update_progress("Verification failed: No child profiles found.", 3, page=page, force_shot=True)
+                    raise Exception("Authentication succeeded, but no active child profiles were discovered for this account.")
 
                 # Save authenticated storage state to disk
                 state_file = os.path.join(user_data_dir, "storage_state.json")

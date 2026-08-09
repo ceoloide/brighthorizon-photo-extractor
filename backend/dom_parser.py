@@ -712,14 +712,12 @@ def dismiss_cdk_overlays(page: Page):
 
 def discover_children_from_family_info(page: Page, context: BrowserContext, logger=None) -> List[Dict[str, str]]:
     """
-    Discovers enrolled children and dependent_ids following Rule 5 (Angular CDK overlay parsing)
-    as implemented in commit 02b8761, with zero hardcoded children.
-
-    Navigates to familyinfocenter.brighthorizons.com/home, clicks 'Actions' span triggers,
-    resolves full child names via card heading search, clicks 'My Bright Day' menu item inside
-    Angular CDK overlay container, and captures dependent_id from the new tab URL.
-
-    Returns list of child profiles: [{'name': 'Byron', 'given_name': 'Byron', 'full_name': '...', 'dependent_id': '...'}, ...]
+    Discovers enrolled children and dependent_ids following exact DOM structure:
+    - Child cards are <app-child> elements.
+    - Child full name is in div.card-title h1 inside the app-child card.
+    - Actions trigger inside app-child is clicked to open the Angular CDK overlay dropdown.
+    - "My Bright Day" menu item opens new tab with dependent_id in the URL.
+    - Zero fallback names, zero hardcoded children.
     """
     log = logger or (lambda msg: None)
     children: List[Dict[str, str]] = []
@@ -728,47 +726,37 @@ def discover_children_from_family_info(page: Page, context: BrowserContext, logg
         page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
 
     try:
-        page.wait_for_selector("span:has-text('Actions')", timeout=15000)
+        page.wait_for_selector("app-child", timeout=15000)
     except Exception:
         pass
 
     page.wait_for_timeout(1000)
-    actions_spans = page.locator("span", has_text="Actions").all()
-    log(f"Found {len(actions_spans)} 'Actions' trigger element(s) on portal home.")
+    cards = page.locator("app-child").all()
+    log(f"Found {len(cards)} child card(s) (<app-child>) on portal home.")
 
-    for idx, span in enumerate(actions_spans):
+    for idx, card in enumerate(cards):
         try:
-            card_name = span.evaluate("""(el) => {
-                let card = el.closest('.card, .child-card, [class*="card"], article, section, app-child');
-                if (card) {
-                    let titleEl = card.querySelector('div.card-title h1, .card-title h1, div.card-title, h1, h2, h3, [class*="title"], [class*="name"]');
-                    if (titleEl && titleEl.textContent.trim()) return titleEl.textContent.trim();
-                }
-                let current = el;
-                while (current && current.tagName !== 'BODY') {
-                    let heading = current.querySelector('div.card-title h1, .card-title h1, div.card-title, h1, h2, h3, [class*="title"], [class*="name"]');
-                    if (heading && heading.textContent.trim()) return heading.textContent.trim();
-                    current = current.parentElement;
-                }
-                return '';
-            }""")
-
-            if not isinstance(card_name, str) or not card_name.strip():
-                try:
-                    raw = span.locator("div.card-title h1, h1").first.inner_text()
-                    if isinstance(raw, str): card_name = raw
-                except Exception:
-                    pass
-
-            if not card_name or not isinstance(card_name, str) or not card_name.strip():
-                log(f"Actions trigger #{idx + 1} could not resolve child card name. Skipping.")
+            title_el = card.locator("div.card-title h1").first
+            try:
+                title_el.wait_for(state="visible", timeout=3000)
+            except Exception:
+                log(f"Child card #{idx + 1} div.card-title h1 not visible. Skipping.")
                 continue
 
-            full_name = card_name.strip()
-            given_name = full_name.split()[0].capitalize()
-            log(f"Inspecting child card #{idx + 1} of {len(actions_spans)}: '{full_name}' (Given: '{given_name}')...")
+            full_name = title_el.inner_text().strip()
+            if not full_name:
+                log(f"Child card #{idx + 1} div.card-title h1 has empty text. Skipping.")
+                continue
 
-            span.click()
+            given_name = full_name.split()[0].capitalize()
+            log(f"Inspecting child card #{idx + 1} of {len(cards)}: '{full_name}' (Given: '{given_name}')...")
+
+            actions_trigger = card.locator("a.mat-mdc-menu-trigger, a:has-text('Actions'), span:has-text('Actions'), button:has-text('Actions')").first
+            if not actions_trigger:
+                log(f"Child card '{given_name}' has no Actions trigger. Skipping.")
+                continue
+
+            actions_trigger.click()
             page.wait_for_timeout(800)
 
             mbd_item = page.locator("span.actions-menu-item-label", has_text="My Bright Day").first
@@ -797,7 +785,7 @@ def discover_children_from_family_info(page: Page, context: BrowserContext, logg
                 }
                 if not any(c["dependent_id"] == dep_id for c in children):
                     children.append(child_profile)
-                    log(f"Discovered child: {given_name} (dependent_id: {dep_id})")
+                    log(f"Discovered active child #{len(children)}: {given_name} (dependent_id: {dep_id[:8]}...)")
 
             try:
                 new_page.close()
@@ -806,7 +794,7 @@ def discover_children_from_family_info(page: Page, context: BrowserContext, logg
 
             dismiss_cdk_overlays(page)
         except Exception as err:
-            log(f"Error discovering child #{idx + 1}: {err}")
+            log(f"Error discovering child card #{idx + 1}: {err}")
             dismiss_cdk_overlays(page)
 
     log(f"Child discovery complete. Total active child profiles found: {len(children)}")
