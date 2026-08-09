@@ -784,11 +784,20 @@ def discover_children_from_family_info(page: Page, context: BrowserContext, logg
                     dismiss_cdk_overlays(page)
                     continue
 
-                with context.expect_page() as new_page_info:
-                    mbd_item.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
+                try:
+                    with context.expect_page(timeout=8000) as new_page_info:
+                        mbd_item.click()
+                    new_page = new_page_info.value
+                except Exception as click_err:
+                    log(f"Native click notice for '{given_name}': {click_err}. Trying JS click...")
+                    with context.expect_page(timeout=8000) as new_page_info:
+                        mbd_item.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
+                    new_page = new_page_info.value
 
-                new_page = new_page_info.value
-                new_page.wait_for_load_state("domcontentloaded", timeout=10000)
+                try:
+                    new_page.wait_for_load_state("domcontentloaded", timeout=10000)
+                except Exception:
+                    pass
 
                 match = re.search(r'dependent_id=([^&]+)', new_page.url)
                 if match:
@@ -801,7 +810,9 @@ def discover_children_from_family_info(page: Page, context: BrowserContext, logg
                     }
                     if not any(c["dependent_id"] == dep_id for c in children):
                         children.append(child_profile)
-                        log(f"Discovered active child #{len(children)}: {given_name} (dependent_id: {dep_id[:8]}...)")
+                        log(f"Discovered active child #{len(children)}: {given_name} (dependent_id: {dep_id})")
+                else:
+                    log(f"Opened tab URL for '{given_name}' did not contain dependent_id: {new_page.url}")
 
                 try:
                     new_page.close()
@@ -866,11 +877,20 @@ def discover_children_from_family_info(page: Page, context: BrowserContext, logg
                         dismiss_cdk_overlays(page)
                         continue
 
-                    with context.expect_page() as new_page_info:
-                        mbd_item.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
+                    try:
+                        with context.expect_page(timeout=8000) as new_page_info:
+                            mbd_item.click()
+                        new_page = new_page_info.value
+                    except Exception as click_err:
+                        log(f"Native click notice for '{given_name}': {click_err}. Trying JS click...")
+                        with context.expect_page(timeout=8000) as new_page_info:
+                            mbd_item.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
+                        new_page = new_page_info.value
 
-                    new_page = new_page_info.value
-                    new_page.wait_for_load_state("domcontentloaded", timeout=10000)
+                    try:
+                        new_page.wait_for_load_state("domcontentloaded", timeout=10000)
+                    except Exception:
+                        pass
 
                     match = re.search(r'dependent_id=([^&]+)', new_page.url)
                     if match:
@@ -883,7 +903,9 @@ def discover_children_from_family_info(page: Page, context: BrowserContext, logg
                         }
                         if not any(c["dependent_id"] == dep_id for c in children):
                             children.append(child_profile)
-                            log(f"Discovered active child #{len(children)}: {given_name} (dependent_id: {dep_id[:8]}...)")
+                            log(f"Discovered active child #{len(children)}: {given_name} (dependent_id: {dep_id})")
+                    else:
+                        log(f"Opened tab URL for '{given_name}' did not contain dependent_id: {new_page.url}")
 
                     try:
                         new_page.close()
