@@ -712,12 +712,13 @@ def dismiss_cdk_overlays(page: Page):
 
 def discover_children_from_family_info(page: Page, context: BrowserContext, logger=None) -> List[Dict[str, str]]:
     """
-    Discovers enrolled children and dependent_ids following exact DOM structure:
-    - Child cards are <app-child> elements.
-    - Child full name is in div.card-title h1 inside the app-child card.
-    - Actions trigger inside app-child is clicked to open the Angular CDK overlay dropdown.
-    - "My Bright Day" menu item opens new tab with dependent_id in the URL.
-    - Zero fallback names, zero hardcoded children.
+    Discovers enrolled children and dependent_ids following Rule 5 (Angular CDK overlay parsing).
+
+    Navigates to familyinfocenter.brighthorizons.com/home, targets app-child elements or Actions triggers,
+    extracts full child names from div.card-title h1 or parent card h1 headers, clicks the Actions trigger,
+    and captures the dependent_id from the My Bright Day tab URL.
+
+    Returns list of child profiles: [{'name': 'Byron', 'given_name': 'Byron', 'full_name': '...', 'dependent_id': '...'}, ...]
     """
     log = logger or (lambda msg: None)
     children: List[Dict[str, str]] = []
@@ -726,76 +727,173 @@ def discover_children_from_family_info(page: Page, context: BrowserContext, logg
         page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
 
     try:
-        page.wait_for_selector("app-child", timeout=15000)
+        page.wait_for_selector("span:has-text('Actions')", timeout=15000)
     except Exception:
         pass
 
     page.wait_for_timeout(1000)
+
+    # Strategy A: app-child elements
     cards = page.locator("app-child").all()
-    log(f"Found {len(cards)} child card(s) (<app-child>) on portal home.")
-
-    for idx, card in enumerate(cards):
-        try:
-            title_el = card.locator("div.card-title h1").first
+    if cards:
+        log(f"Found {len(cards)} child card(s) (<app-child>) on portal home.")
+        for idx, card in enumerate(cards):
             try:
-                title_el.wait_for(state="visible", timeout=3000)
-            except Exception:
-                log(f"Child card #{idx + 1} div.card-title h1 not visible. Skipping.")
-                continue
-
-            full_name = title_el.inner_text().strip()
-            if not full_name:
-                log(f"Child card #{idx + 1} div.card-title h1 has empty text. Skipping.")
-                continue
-
-            given_name = full_name.split()[0].capitalize()
-            log(f"Inspecting child card #{idx + 1} of {len(cards)}: '{full_name}' (Given: '{given_name}')...")
-
-            actions_trigger = card.locator("a.mat-mdc-menu-trigger, a:has-text('Actions'), span:has-text('Actions'), button:has-text('Actions')").first
-            if not actions_trigger:
-                log(f"Child card '{given_name}' has no Actions trigger. Skipping.")
-                continue
-
-            actions_trigger.click()
-            page.wait_for_timeout(800)
-
-            mbd_item = page.locator("span.actions-menu-item-label", has_text="My Bright Day").first
-            try:
-                mbd_item.wait_for(state="visible", timeout=3000)
-            except Exception:
-                # Child has no active enrollment (Rule 5)
-                log(f"Child '{given_name}' has no active My Bright Day enrollment. Skipping.")
                 dismiss_cdk_overlays(page)
-                continue
+                try:
+                    card.scroll_into_view_if_needed(timeout=3000)
+                except Exception:
+                    pass
 
-            with context.expect_page() as new_page_info:
-                mbd_item.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
+                title_el = card.locator("div.card-title h1, h1").first
+                try:
+                    title_el.wait_for(state="visible", timeout=3000)
+                except Exception:
+                    pass
 
-            new_page = new_page_info.value
-            new_page.wait_for_load_state("domcontentloaded", timeout=10000)
+                full_name = ""
+                try:
+                    raw = title_el.inner_text()
+                    full_name = raw.strip() if isinstance(raw, str) else str(raw)
+                except Exception:
+                    pass
 
-            match = re.search(r'dependent_id=([^&]+)', new_page.url)
-            if match:
-                dep_id = match.group(1)
-                child_profile = {
-                    "name": given_name,
-                    "given_name": given_name,
-                    "full_name": full_name,
-                    "dependent_id": dep_id
-                }
-                if not any(c["dependent_id"] == dep_id for c in children):
-                    children.append(child_profile)
-                    log(f"Discovered active child #{len(children)}: {given_name} (dependent_id: {dep_id[:8]}...)")
+                if not full_name:
+                    continue
 
-            try:
-                new_page.close()
-            except Exception:
-                pass
+                given_name = full_name.split()[0].capitalize()
+                log(f"Inspecting child card #{idx + 1} of {len(cards)}: '{full_name}' (Given: '{given_name}')...")
 
-            dismiss_cdk_overlays(page)
-        except Exception as err:
-            log(f"Error discovering child card #{idx + 1}: {err}")
-            dismiss_cdk_overlays(page)
+                actions_trigger = card.locator("a.mat-mdc-menu-trigger, a:has-text('Actions'), span:has-text('Actions'), button:has-text('Actions')").first
+                if not actions_trigger:
+                    continue
+
+                try:
+                    actions_trigger.scroll_into_view_if_needed(timeout=2000)
+                except Exception:
+                    pass
+
+                actions_trigger.click()
+                page.wait_for_timeout(800)
+
+                mbd_item = page.locator("span.actions-menu-item-label", has_text="My Bright Day").first
+                try:
+                    mbd_item.wait_for(state="visible", timeout=3000)
+                except Exception:
+                    log(f"Child '{given_name}' has no active My Bright Day enrollment. Skipping.")
+                    dismiss_cdk_overlays(page)
+                    continue
+
+                with context.expect_page() as new_page_info:
+                    mbd_item.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
+
+                new_page = new_page_info.value
+                new_page.wait_for_load_state("domcontentloaded", timeout=10000)
+
+                match = re.search(r'dependent_id=([^&]+)', new_page.url)
+                if match:
+                    dep_id = match.group(1)
+                    child_profile = {
+                        "name": given_name,
+                        "given_name": given_name,
+                        "full_name": full_name,
+                        "dependent_id": dep_id
+                    }
+                    if not any(c["dependent_id"] == dep_id for c in children):
+                        children.append(child_profile)
+                        log(f"Discovered active child #{len(children)}: {given_name} (dependent_id: {dep_id[:8]}...)")
+
+                try:
+                    new_page.close()
+                except Exception:
+                    pass
+
+                dismiss_cdk_overlays(page)
+            except Exception as err:
+                log(f"Notice inspecting child card #{idx + 1}: {err}")
+                dismiss_cdk_overlays(page)
+
+    # Fallback to Actions trigger elements if app-child cards count was 0 or gave 0 children
+    if not children:
+        actions_spans = page.locator("span:has-text('Actions'), a:has-text('Actions'), button:has-text('Actions')").all()
+        if actions_spans:
+            log(f"Found {len(actions_spans)} 'Actions' trigger element(s) on portal home.")
+            for idx, span in enumerate(actions_spans):
+                try:
+                    dismiss_cdk_overlays(page)
+                    try:
+                        span.scroll_into_view_if_needed(timeout=3000)
+                    except Exception:
+                        pass
+
+                    card_name = span.evaluate("""(el) => {
+                        let card = el.closest('.card, .child-card, [class*="card"], article, section, app-child');
+                        if (card) {
+                            let titleEl = card.querySelector('div.card-title h1, .card-title h1, div.card-title, h1, h2, h3, [class*="title"], [class*="name"]');
+                            if (titleEl && titleEl.textContent.trim()) return titleEl.textContent.trim();
+                        }
+                        let current = el;
+                        while (current && current.tagName !== 'BODY') {
+                            let heading = current.querySelector('div.card-title h1, .card-title h1, div.card-title, h1, h2, h3, [class*="title"], [class*="name"]');
+                            if (heading && heading.textContent.trim()) return heading.textContent.trim();
+                            current = current.parentElement;
+                        }
+                        return '';
+                    }""")
+
+                    if not isinstance(card_name, str) or not card_name.strip():
+                        try:
+                            raw = span.locator("div.card-title h1, h1").first.inner_text()
+                            if isinstance(raw, str): card_name = raw
+                        except Exception:
+                            pass
+
+                    if not card_name or not isinstance(card_name, str) or not card_name.strip():
+                        continue
+
+                    full_name = card_name.strip()
+                    given_name = full_name.split()[0].capitalize()
+                    log(f"Inspecting child trigger #{idx + 1} of {len(actions_spans)}: '{full_name}' (Given: '{given_name}')...")
+
+                    span.click()
+                    page.wait_for_timeout(800)
+
+                    mbd_item = page.locator("span.actions-menu-item-label", has_text="My Bright Day").first
+                    try:
+                        mbd_item.wait_for(state="visible", timeout=3000)
+                    except Exception:
+                        log(f"Child '{given_name}' has no active My Bright Day enrollment. Skipping.")
+                        dismiss_cdk_overlays(page)
+                        continue
+
+                    with context.expect_page() as new_page_info:
+                        mbd_item.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
+
+                    new_page = new_page_info.value
+                    new_page.wait_for_load_state("domcontentloaded", timeout=10000)
+
+                    match = re.search(r'dependent_id=([^&]+)', new_page.url)
+                    if match:
+                        dep_id = match.group(1)
+                        child_profile = {
+                            "name": given_name,
+                            "given_name": given_name,
+                            "full_name": full_name,
+                            "dependent_id": dep_id
+                        }
+                        if not any(c["dependent_id"] == dep_id for c in children):
+                            children.append(child_profile)
+                            log(f"Discovered active child #{len(children)}: {given_name} (dependent_id: {dep_id[:8]}...)")
+
+                    try:
+                        new_page.close()
+                    except Exception:
+                        pass
+
+                    dismiss_cdk_overlays(page)
+                except Exception as err:
+                    log(f"Notice inspecting child trigger #{idx + 1}: {err}")
+                    dismiss_cdk_overlays(page)
 
     log(f"Child discovery complete. Total active child profiles found: {len(children)}")
     return children
