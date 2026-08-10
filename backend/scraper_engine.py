@@ -32,7 +32,7 @@ try:
 except ImportError:
     stealth_sync = None
 
-FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://flaresolverr:8191/v1")
+FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://192.168.1.176:8191/v1")
 
 def ensure_xvfb_display(width=1280, height=720):
     """Ensures Xvfb virtual display :99 is active without disrupting active concurrent sessions."""
@@ -1103,8 +1103,19 @@ class ScraperJob:
             self.log("Clicking portal Log In button...")
             if update_progress_cb: update_progress_cb("Clicking portal Log In button...", 2)
             btn = page.locator("button:has-text('Log In'), a:has-text('Log In'), button:has-text('Sign In'), a:has-text('Sign In')").first
-            btn.click()
-            page.wait_for_load_state("domcontentloaded")
+            if btn.count() > 0:
+                try:
+                    btn.click(timeout=3000, force=True)
+                except Exception as click_err:
+                    self.log(f"Notice during native click on Log In button: {click_err}. Trying JS click fallback...")
+                    try:
+                        btn.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
+                    except Exception:
+                        pass
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=6000)
+            except Exception:
+                pass
             state = self.detect_page_state(page, max_wait_sec=15)
             self.log(f"Post-click page state: '{state}' (URL: {page.url})")
 
@@ -1123,22 +1134,24 @@ class ScraperJob:
                     self.log("Filling email address into SSO username input...")
                     if update_progress_cb: update_progress_cb("Filling email address...", 2)
                     page.fill("input[name='username'], input[id='username'], input[type='email']", self.email)
+                    page.wait_for_timeout(400)
                     
-                    # If password field is not yet visible, press Enter to submit username step
+                    # If password field is not yet visible, submit username step
                     pwd_inp_check = page.locator("input[name='password']:not(.hide), input[id='password']").first
                     if pwd_inp_check.count() == 0 or not pwd_inp_check.is_visible():
                         self.log("Submitting email step...")
-                        username_inp = page.locator("input[name='username'], input[id='username'], input[type='email']").first
-                        if username_inp.count() > 0:
-                            try: username_inp.press("Enter")
-                            except Exception: pass
-                        btn = page.locator("button[type='submit'], button[name='action'], button:has-text('Continue'), button:has-text('Next')").first
-                        if btn.count() > 0:
+                        btn = page.locator("button[type='submit']:not(.ulp-hidden-form-submit-button), button[name='action']:not(.ulp-hidden-form-submit-button), button[data-action-button-primary='true'], button:has-text('Continue'):not(.ulp-hidden-form-submit-button), button:has-text('Next'):not(.ulp-hidden-form-submit-button)").first
+                        if btn.count() > 0 and btn.is_visible():
                             try:
-                                btn.evaluate("(el) => { if (el.form && el.form.requestSubmit) { try { el.form.requestSubmit(); } catch(e) { el.click(); } } else { el.click(); } }")
-                            except Exception:
                                 btn.click(force=True)
-                        page.keyboard.press("Enter")
+                            except Exception:
+                                btn.evaluate("(el) => { if (el.form && el.form.requestSubmit) { try { el.form.requestSubmit(); } catch(e) { el.click(); } } else { el.click(); } }")
+                        else:
+                            username_inp = page.locator("input[name='username'], input[id='username'], input[type='email']").first
+                            if username_inp.count() > 0:
+                                try: username_inp.press("Enter")
+                                except Exception: pass
+                        page.wait_for_timeout(500)
                         try:
                             page.locator("input[name='password']:not(.hide), input[id='password'], span#error-element-username, div#error-element-username, .ulp-input-error-message").first.wait_for(state="visible", timeout=15000)
                         except Exception:
@@ -1153,7 +1166,7 @@ class ScraperJob:
             if update_progress_cb: update_progress_cb("Submitting password...", 2)
             page.fill("input[name='password']:not(.hide), input[id='password']", self.password)
             self.log("Submitting password step...")
-            btn_pwd = page.locator("button[type='submit'], button[name='action'], button:has-text('Continue'), button:has-text('Log In')").first
+            btn_pwd = page.locator("button[type='submit']:not(.ulp-hidden-form-submit-button), button[name='action']:not(.ulp-hidden-form-submit-button), button[data-action-button-primary='true'], button:has-text('Continue'):not(.ulp-hidden-form-submit-button), button:has-text('Log In'):not(.ulp-hidden-form-submit-button)").first
             if btn_pwd.count() > 0 and btn_pwd.is_visible():
                 try:
                     btn_pwd.click(force=True)
@@ -1365,6 +1378,7 @@ class ScraperJob:
         user_data_dir = self.tenant_storage.user_data_dir
         # Purge existing browser profile session before pre-verification to force a fresh login
         self.tenant_storage.clear_session()
+        self.tenant_storage.clear_log()
         clean_user_data_locks(user_data_dir)
         clearance_cookies, solver_ua = self.solve_cloudflare_flaresolverr("https://familyinfocenter.brighthorizons.com/home")
         

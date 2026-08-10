@@ -205,8 +205,9 @@ def test_discover_children_from_family_info_mock():
 
 def test_dismiss_cdk_overlays():
     mock_page = MagicMock()
+    mock_page.locator.return_value.count.return_value = 1
     dismiss_cdk_overlays(mock_page)
-    mock_page.keyboard.press.assert_called_once_with("Escape")
+    mock_page.keyboard.press.assert_called_with("Escape")
 
 
 def test_extract_obj_id_from_direct_gcs_photo_url():

@@ -21,6 +21,7 @@ WORKDIR /app
 
 # 1. System & Playwright dependencies (Cached OS Layer)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    tini \
     curl \
     git \
     libnss3 \
@@ -63,5 +64,6 @@ COPY main.py .
 EXPOSE 8095
 VOLUME ["/app/data"]
 
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["uvicorn", "backend.server:app", "--host", "0.0.0.0", "--port", "8095"]
 

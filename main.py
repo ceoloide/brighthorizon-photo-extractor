@@ -466,31 +466,56 @@ def discover_children(page, context):
                 }
             """)
 
-            # Click the Actions span to open the dropdown
+            # Dismiss any open CDK overlay
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(200)
+
+            # Click the Actions trigger to open the dropdown
             btn.click()
-            page.wait_for_timeout(1500)
+            page.wait_for_timeout(500)
+
+            # Verify if CDK overlay pane appeared. If clicking closed a prior menu, re-click
+            overlay_pane = page.locator(".cdk-overlay-pane").first
+            if overlay_pane.count() == 0 or not overlay_pane.is_visible():
+                try:
+                    btn.click(force=True)
+                except Exception:
+                    btn.evaluate("(el) => el.click()")
+                page.wait_for_timeout(500)
 
             # The dropdown items are <span class="actions-menu-item-label"> inside a
-            # CDK overlay. We must target that class specifically — the generic
-            # "text=My Bright Day" locator matches the promotional h4 banner instead.
-            mbd = page.locator("span.actions-menu-item-label", has_text="My Bright Day").first
+            # CDK overlay. We target that class specifically inside .cdk-overlay-pane
+            mbd = page.locator(".cdk-overlay-pane span.actions-menu-item-label, div.cdk-overlay-container span.actions-menu-item-label", has_text="My Bright Day").first
             try:
-                mbd.wait_for(state="visible", timeout=3000)
+                mbd.wait_for(state="visible", timeout=3500)
             except Exception:
                 # No "My Bright Day" option in this dropdown — child not enrolled, skip
                 page.keyboard.press("Escape")
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(300)
                 continue
 
             # Clicking the span's parent (the actual <a> or <button>) opens a new tab
             # with the dependent_id in the URL. Capture that tab.
-            with context.expect_page() as new_page_info:
-                mbd.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
+            try:
+                with context.expect_page(timeout=8000) as new_page_info:
+                    mbd.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
+                new_page = new_page_info.value
+            except Exception:
+                continue
 
-            new_page = new_page_info.value
-            new_page.wait_for_load_state("domcontentloaded", timeout=10000)
+            try:
+                new_page.wait_for_load_state("domcontentloaded", timeout=10000)
+            except Exception:
+                pass
+
             new_url = new_page.url
-            new_page.close()
+            try:
+                new_page.close()
+            except Exception:
+                pass
+
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(300)
 
             m = re.search(r'dependent_id=([^&]+)', new_url)
             if not m:

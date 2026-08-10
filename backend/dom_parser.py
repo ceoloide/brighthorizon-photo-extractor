@@ -704,8 +704,18 @@ def extract_feed_items(page: Page, timeframe_year: Optional[int] = None, logger:
 def dismiss_cdk_overlays(page: Page):
     """Dismisses open Angular CDK dropdown overlays cleanly."""
     try:
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(300)
+        if page.locator(".cdk-overlay-pane, .cdk-overlay-backdrop").count() > 0:
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(300)
+            if page.locator(".cdk-overlay-pane").count() > 0:
+                backdrop = page.locator(".cdk-overlay-backdrop").first
+                if backdrop.count() > 0 and backdrop.is_visible():
+                    try:
+                        backdrop.click(timeout=1000, force=True)
+                    except Exception:
+                        pass
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(200)
     except Exception:
         pass
 
@@ -723,20 +733,29 @@ def discover_children_from_family_info(page: Page, context: BrowserContext, logg
     log = logger or (lambda msg: None)
     children: List[Dict[str, str]] = []
 
+    log(f"[Child-Discovery] Initiating child auto-discovery on current URL: '{page.url}'")
+
     if "familyinfocenter.brighthorizons.com/home" not in page.url:
+        log("[Child-Discovery] Navigating to https://familyinfocenter.brighthorizons.com/home...")
         page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
 
     try:
-        page.wait_for_selector("app-child, span:has-text('Actions')", timeout=20000, state="attached")
-    except Exception:
-        pass
+        page.wait_for_selector("app-child, span:has-text('Actions'), a:has-text('Actions')", timeout=20000, state="attached")
+    except Exception as e:
+        log(f"[Child-Discovery] Timeout waiting for child card elements: {e}")
 
     page.wait_for_timeout(2000)
 
     # Strategy A: app-child elements
     cards = page.locator("app-child").all()
+    log(f"[Child-Discovery] Strategy A: Found {len(cards)} child card(s) (<app-child>) on page.")
+
+    if not cards:
+        # Diagnostic DOM capture if no app-child elements were found
+        headings = [h.inner_text().strip() for h in page.locator("h1, h2, h3, .card-title").all() if h.is_visible()]
+        log(f"[Child-Discovery] [Diagnostic] No <app-child> elements found. Visible page headings: {headings}")
+
     if cards:
-        log(f"Found {len(cards)} child card(s) (<app-child>) on portal home.")
         for idx, card in enumerate(cards):
             try:
                 dismiss_cdk_overlays(page)
@@ -759,13 +778,17 @@ def discover_children_from_family_info(page: Page, context: BrowserContext, logg
                     pass
 
                 if not full_name:
+                    log(f"[Child-Discovery] Card #{idx + 1}: Title text empty. Skipping.")
                     continue
 
                 given_name = full_name.split()[0].capitalize()
-                log(f"Inspecting child card #{idx + 1} of {len(cards)}: '{full_name}' (Given: '{given_name}')...")
+                log(f"[Child-Discovery] Inspecting card #{idx + 1}/{len(cards)}: Full Name='{full_name}', Given Name='{given_name}'...")
 
-                actions_trigger = card.locator("a.mat-mdc-menu-trigger, a:has-text('Actions'), span:has-text('Actions'), button:has-text('Actions')").first
-                if not actions_trigger:
+                dismiss_cdk_overlays(page)
+
+                actions_trigger = card.locator(".actions-button-menu a.mat-mdc-menu-trigger, .actions-button-menu a, a.outlined-button, a:has-text('Actions'), span:has-text('Actions'), button:has-text('Actions')").first
+                if not actions_trigger or actions_trigger.count() == 0:
+                    log(f"[Child-Discovery] No 'Actions' trigger found inside card for '{given_name}'. Skipping.")
                     continue
 
                 try:
@@ -773,62 +796,99 @@ def discover_children_from_family_info(page: Page, context: BrowserContext, logg
                 except Exception:
                     pass
 
+                log(f"[Child-Discovery] Clicking 'Actions' button for '{given_name}'...")
                 actions_trigger.click()
-                page.wait_for_timeout(800)
+                page.wait_for_timeout(500)
 
-                mbd_item = page.locator("span.actions-menu-item-label", has_text="My Bright Day").first
+                # Verify CDK overlay pane
+                overlay_pane = page.locator(".cdk-overlay-pane").first
+                if overlay_pane.count() == 0 or not overlay_pane.is_visible():
+                    log(f"[Child-Discovery] Overlay pane not visible after click for '{given_name}'. Re-clicking trigger...")
+                    try:
+                        actions_trigger.click(force=True)
+                    except Exception:
+                        actions_trigger.evaluate("(el) => el.click()")
+                    page.wait_for_timeout(500)
+
+                # Capture overlay menu items for diagnosis
+                menu_labels = []
                 try:
-                    mbd_item.wait_for(state="visible", timeout=3000)
+                    labels = page.locator(".cdk-overlay-pane span.actions-menu-item-label, .cdk-overlay-pane a, .cdk-overlay-pane button").all()
+                    menu_labels = [l.inner_text().strip() for l in labels if l.is_visible()]
+                    log(f"[Child-Discovery] Overlay menu items for '{given_name}': {menu_labels}")
+                except Exception as e:
+                    log(f"[Child-Discovery] Notice reading overlay menu items: {e}")
+
+                mbd_item = page.locator(".cdk-overlay-pane span.actions-menu-item-label, div.cdk-overlay-container span.actions-menu-item-label", has_text="My Bright Day").first
+                try:
+                    mbd_item.wait_for(state="visible", timeout=3500)
                 except Exception:
-                    log(f"Child '{given_name}' has no active My Bright Day enrollment. Skipping.")
+                    log(f"[Child-Discovery] Child '{given_name}' has no active My Bright Day enrollment (Menu items: {menu_labels}). Skipping.")
                     dismiss_cdk_overlays(page)
                     continue
 
+                new_page = None
+                log(f"[Child-Discovery] Clicking 'My Bright Day' for '{given_name}' and waiting for new tab...")
                 try:
                     with context.expect_page(timeout=8000) as new_page_info:
                         mbd_item.click()
                     new_page = new_page_info.value
                 except Exception as click_err:
-                    log(f"Native click notice for '{given_name}': {click_err}. Trying JS click...")
-                    with context.expect_page(timeout=8000) as new_page_info:
-                        mbd_item.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
-                    new_page = new_page_info.value
+                    log(f"[Child-Discovery] Native click notice for '{given_name}': {click_err}. Trying JS click...")
+                    try:
+                        with context.expect_page(timeout=8000) as new_page_info:
+                            mbd_item.evaluate("(el) => (el.closest('button') || el.closest('a') || el).click()")
+                        new_page = new_page_info.value
+                    except Exception as err2:
+                        log(f"[Child-Discovery] Error opening My Bright Day tab for '{given_name}': {err2}")
 
-                try:
-                    new_page.wait_for_load_state("domcontentloaded", timeout=10000)
-                except Exception:
-                    pass
+                if new_page:
+                    log(f"[Child-Discovery] New tab opened for '{given_name}'. Initial URL: '{new_page.url}'. Polling for 'dependent_id='...")
+                    try:
+                        new_page.wait_for_url(lambda u: "dependent_id=" in u, timeout=12000)
+                    except Exception:
+                        try:
+                            new_page.wait_for_load_state("domcontentloaded", timeout=5000)
+                        except Exception:
+                            pass
 
-                match = re.search(r'dependent_id=([^&]+)', new_page.url)
-                if match:
-                    dep_id = match.group(1)
-                    child_profile = {
-                        "name": given_name,
-                        "given_name": given_name,
-                        "full_name": full_name,
-                        "dependent_id": dep_id
-                    }
-                    if not any(c["dependent_id"] == dep_id for c in children):
-                        children.append(child_profile)
-                        log(f"Discovered active child #{len(children)}: {given_name} (dependent_id: {dep_id})")
-                else:
-                    log(f"Opened tab URL for '{given_name}' did not contain dependent_id: {new_page.url}")
+                    dep_id = None
+                    for attempt in range(1, 11):
+                        match = re.search(r'dependent_id=([^&]+)', new_page.url)
+                        if match:
+                            dep_id = match.group(1)
+                            log(f"[Child-Discovery] Found dependent_id on attempt #{attempt}: '{dep_id}' (URL: '{new_page.url}')")
+                            break
+                        page.wait_for_timeout(500)
 
-                try:
-                    new_page.close()
-                except Exception:
-                    pass
+                    if dep_id:
+                        child_profile = {
+                            "name": given_name,
+                            "given_name": given_name,
+                            "full_name": full_name,
+                            "dependent_id": dep_id
+                        }
+                        if not any(c["dependent_id"] == dep_id for c in children):
+                            children.append(child_profile)
+                            log(f"[Child-Discovery] 🎉 DISCOVERED CHILD #{len(children)}: Given Name='{given_name}', Full Name='{full_name}', Dependent ID='{dep_id}'")
+                    else:
+                        log(f"[Child-Discovery] ⚠️ WARNING: Opened tab URL for '{given_name}' did NOT contain 'dependent_id=' after polling. Final URL: '{new_page.url}'")
+
+                    try:
+                        new_page.close()
+                    except Exception:
+                        pass
 
                 dismiss_cdk_overlays(page)
             except Exception as err:
-                log(f"Notice inspecting child card #{idx + 1}: {err}")
+                log(f"[Child-Discovery] Error inspecting child card #{idx + 1}: {err}")
                 dismiss_cdk_overlays(page)
 
-    # Fallback to Actions trigger elements if app-child cards count was 0 or gave 0 children
+    # Strategy B: Fallback to Actions trigger elements if app-child cards count was 0 or gave 0 children
     if not children:
         actions_spans = page.locator("span:has-text('Actions'), a:has-text('Actions'), button:has-text('Actions')").all()
+        log(f"[Child-Discovery] Strategy B: Found {len(actions_spans)} standalone 'Actions' trigger element(s) on portal home.")
         if actions_spans:
-            log(f"Found {len(actions_spans)} 'Actions' trigger element(s) on portal home.")
             for idx, span in enumerate(actions_spans):
                 try:
                     dismiss_cdk_overlays(page)
@@ -860,62 +920,95 @@ def discover_children_from_family_info(page: Page, context: BrowserContext, logg
                             pass
 
                     if not card_name or not isinstance(card_name, str) or not card_name.strip():
+                        log(f"[Child-Discovery] Standalone Actions trigger #{idx + 1}: Could not determine parent card name. Skipping.")
                         continue
 
                     full_name = card_name.strip()
                     given_name = full_name.split()[0].capitalize()
-                    log(f"Inspecting child trigger #{idx + 1} of {len(actions_spans)}: '{full_name}' (Given: '{given_name}')...")
+                    log(f"[Child-Discovery] Inspecting standalone trigger #{idx + 1}/{len(actions_spans)}: Full Name='{full_name}', Given Name='{given_name}'...")
 
                     span.click()
-                    page.wait_for_timeout(800)
+                    page.wait_for_timeout(500)
 
-                    mbd_item = page.locator("span.actions-menu-item-label", has_text="My Bright Day").first
+                    overlay_pane = page.locator(".cdk-overlay-pane").first
+                    if overlay_pane.count() == 0 or not overlay_pane.is_visible():
+                        try:
+                            span.click(force=True)
+                        except Exception:
+                            span.evaluate("(el) => el.click()")
+                        page.wait_for_timeout(500)
+
+                    menu_labels = []
                     try:
-                        mbd_item.wait_for(state="visible", timeout=3000)
+                        labels = page.locator(".cdk-overlay-pane span.actions-menu-item-label, .cdk-overlay-pane a, .cdk-overlay-pane button").all()
+                        menu_labels = [l.inner_text().strip() for l in labels if l.is_visible()]
+                        log(f"[Child-Discovery] Standalone overlay menu items for '{given_name}': {menu_labels}")
+                    except Exception as e:
+                        log(f"[Child-Discovery] Notice reading overlay menu items: {e}")
+
+                    mbd_item = page.locator(".cdk-overlay-pane span.actions-menu-item-label, div.cdk-overlay-container span.actions-menu-item-label", has_text="My Bright Day").first
+                    try:
+                        mbd_item.wait_for(state="visible", timeout=3500)
                     except Exception:
-                        log(f"Child '{given_name}' has no active My Bright Day enrollment. Skipping.")
+                        log(f"[Child-Discovery] Child '{given_name}' has no active My Bright Day enrollment (Menu items: {menu_labels}). Skipping.")
                         dismiss_cdk_overlays(page)
                         continue
 
+                    new_page = None
                     try:
                         with context.expect_page(timeout=8000) as new_page_info:
                             mbd_item.click()
                         new_page = new_page_info.value
                     except Exception as click_err:
-                        log(f"Native click notice for '{given_name}': {click_err}. Trying JS click...")
-                        with context.expect_page(timeout=8000) as new_page_info:
-                            mbd_item.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
-                        new_page = new_page_info.value
+                        log(f"[Child-Discovery] Native click notice for '{given_name}': {click_err}. Trying JS click...")
+                        try:
+                            with context.expect_page(timeout=8000) as new_page_info:
+                                mbd_item.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
+                            new_page = new_page_info.value
+                        except Exception as err2:
+                            log(f"[Child-Discovery] Error opening My Bright Day tab for '{given_name}': {err2}")
 
-                    try:
-                        new_page.wait_for_load_state("domcontentloaded", timeout=10000)
-                    except Exception:
-                        pass
+                    if new_page:
+                        log(f"[Child-Discovery] New tab opened for '{given_name}'. Initial URL: '{new_page.url}'. Polling for 'dependent_id='...")
+                        try:
+                            new_page.wait_for_url(lambda u: "dependent_id=" in u, timeout=12000)
+                        except Exception:
+                            try:
+                                new_page.wait_for_load_state("domcontentloaded", timeout=5000)
+                            except Exception:
+                                pass
 
-                    match = re.search(r'dependent_id=([^&]+)', new_page.url)
-                    if match:
-                        dep_id = match.group(1)
-                        child_profile = {
-                            "name": given_name,
-                            "given_name": given_name,
-                            "full_name": full_name,
-                            "dependent_id": dep_id
-                        }
-                        if not any(c["dependent_id"] == dep_id for c in children):
-                            children.append(child_profile)
-                            log(f"Discovered active child #{len(children)}: {given_name} (dependent_id: {dep_id})")
-                    else:
-                        log(f"Opened tab URL for '{given_name}' did not contain dependent_id: {new_page.url}")
+                        dep_id = None
+                        for attempt in range(1, 11):
+                            match = re.search(r'dependent_id=([^&]+)', new_page.url)
+                            if match:
+                                dep_id = match.group(1)
+                                log(f"[Child-Discovery] Found dependent_id on attempt #{attempt}: '{dep_id}' (URL: '{new_page.url}')")
+                                break
+                            page.wait_for_timeout(500)
 
-                    try:
-                        new_page.close()
-                    except Exception:
-                        pass
+                        if dep_id:
+                            child_profile = {
+                                "name": given_name,
+                                "given_name": given_name,
+                                "full_name": full_name,
+                                "dependent_id": dep_id
+                            }
+                            if not any(c["dependent_id"] == dep_id for c in children):
+                                children.append(child_profile)
+                                log(f"[Child-Discovery] 🎉 DISCOVERED CHILD #{len(children)}: Given Name='{given_name}', Full Name='{full_name}', Dependent ID='{dep_id}'")
+                        else:
+                            log(f"[Child-Discovery] ⚠️ WARNING: Opened tab URL for '{given_name}' did NOT contain 'dependent_id=' after polling. Final URL: '{new_page.url}'")
+
+                        try:
+                            new_page.close()
+                        except Exception:
+                            pass
 
                     dismiss_cdk_overlays(page)
                 except Exception as err:
-                    log(f"Notice inspecting child trigger #{idx + 1}: {err}")
+                    log(f"[Child-Discovery] Error inspecting standalone trigger #{idx + 1}: {err}")
                     dismiss_cdk_overlays(page)
 
-    log(f"Child discovery complete. Total active child profiles found: {len(children)}")
+    log(f"[Child-Discovery] Summary: Discovered {len(children)} active child profile(s): {[c['name'] for c in children]}")
     return children
