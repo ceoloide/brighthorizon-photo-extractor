@@ -29,7 +29,7 @@ export const ShareProgressModal: React.FC<ShareProgressModalProps> = ({
               <Share2 className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-slate-900 text-sm">Preparing iOS Share</h3>
+              <h3 className="font-bold text-slate-900 text-sm">Preparing Share</h3>
               <p className="text-xs text-slate-500 truncate max-w-[200px]">{title}</p>
             </div>
           </div>
@@ -64,7 +64,7 @@ export const ShareProgressModal: React.FC<ShareProgressModalProps> = ({
         </div>
 
         <p className="text-[11px] text-slate-400 text-center">
-          Building image bundle for native iOS Share Sheet...
+          Building image bundle for sharing...
         </p>
       </div>
     </div>
