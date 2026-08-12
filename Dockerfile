@@ -8,7 +8,7 @@ RUN npm install
 
 # Copy frontend source and build dist
 COPY frontend/ ./
-RUN rm -rf dist && npm run build
+RUN npm run build
 
 # Stage 2: Production Python Runtime
 FROM python:3.11-slim
