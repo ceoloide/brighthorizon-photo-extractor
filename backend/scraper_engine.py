@@ -161,15 +161,39 @@ def check_and_refetch_asset(
 
 check_and_refetch_if_200x200 = check_and_refetch_asset
 
+import shutil
+
 def clean_user_data_locks(user_data_dir: str):
-    """Safely removes stale Chromium Singleton lock files to prevent browser launch crashes."""
+    """Safely removes stale Chromium Singleton lock files and ensures write permissions across user_data_dir."""
     if not os.path.exists(user_data_dir):
         return
+    try:
+        os.chmod(user_data_dir, 0o777)
+    except Exception:
+        pass
+
     for root, dirs, files in os.walk(user_data_dir):
+        try:
+            os.chmod(root, 0o777)
+        except Exception:
+            pass
+
         for fname in files:
-            if "Singleton" in fname or fname == "RunningChromeVersion":
+            if "Singleton" in fname or fname == "RunningChromeVersion" or "Lock" in fname:
+                fpath = os.path.join(root, fname)
                 try:
-                    os.remove(os.path.join(root, fname))
+                    if os.path.islink(fpath):
+                        os.unlink(fpath)
+                    elif os.path.exists(fpath):
+                        os.remove(fpath)
+                except Exception:
+                    pass
+
+        for dname in dirs:
+            if "Singleton" in dname:
+                dpath = os.path.join(root, dname)
+                try:
+                    shutil.rmtree(dpath, ignore_errors=True)
                 except Exception:
                     pass
 
