@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Play, RefreshCw, LogOut, CheckCircle2, AlertTriangle, Terminal, Camera, Shield, ShieldCheck, FileSpreadsheet, FolderTree, Trash2, AlertCircle, Copy, Check, Monitor, Download } from 'lucide-react';
+import { Play, RefreshCw, LogOut, CheckCircle2, AlertTriangle, Terminal, Camera, Shield, ShieldCheck, FileSpreadsheet, FolderTree, Trash2, AlertCircle, Copy, Check, Monitor, Download, Calendar } from 'lucide-react';
 import { Gallery } from './Gallery';
 import { ArchiveManager } from './ArchiveManager';
 
@@ -32,6 +32,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
   const [mfaCode, setMfaCode] = useState<string>('');
   const [mfaSubmitting, setMfaSubmitting] = useState<boolean>(false);
   const [mfaError, setMfaError] = useState<string | null>(null);
+  const [isScheduled, setIsScheduled] = useState<boolean>(false);
+  const [togglingSchedule, setTogglingSchedule] = useState<boolean>(false);
 
   const handleSubmitMfaCode = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -117,11 +119,38 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
-      if (res.ok && data.session_expires_at) {
-        setSessionExpiresAt(data.session_expires_at);
+      if (res.ok) {
+        if (data.session_expires_at) setSessionExpiresAt(data.session_expires_at);
+        if (typeof data.scheduled_incremental === 'boolean') {
+          setIsScheduled(data.scheduled_incremental);
+        }
       }
     } catch (err) {
       console.error('Error fetching session info:', err);
+    }
+  };
+
+  const handleToggleSchedule = async () => {
+    if (togglingSchedule) return;
+    const targetState = !isScheduled;
+    setTogglingSchedule(true);
+    try {
+      const res = await fetch('/api/extraction/schedule', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ enabled: targetState })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setIsScheduled(data.scheduled_incremental);
+      }
+    } catch (err) {
+      console.error('Failed to toggle schedule:', err);
+    } finally {
+      setTogglingSchedule(false);
     }
   };
 
@@ -575,6 +604,40 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
               </div>
             )}
           </div>
+
+          {/* Schedule Toggle (Visible when Incremental & All Enrolled Children are selected) */}
+          {syncMode === 'incremental' && targetChild === 'all' && (
+            <div className="mt-3 p-3.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-4">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-indigo-600 shrink-0" />
+                  <span className="text-xs font-semibold text-slate-800 uppercase tracking-wider">
+                    Automatic Daily Schedule
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Every day between 6:00 PM and 6:15 PM an incremental job will launch automatically.
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={isScheduled}
+                disabled={isInputDisabled || togglingSchedule}
+                onClick={handleToggleSchedule}
+                title={isScheduled ? "Disable automatic daily incremental extraction" : "Enable automatic daily incremental extraction"}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2 ${
+                  isScheduled ? 'bg-indigo-600' : 'bg-slate-300'
+                } disabled:opacity-50`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                    isScheduled ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+          )}
 
           {/* Status Alert & Progress Console */}
           {status.state !== 'idle' && (

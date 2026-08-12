@@ -6,14 +6,15 @@ import shutil
 import threading
 import uuid
 from typing import Dict, Any, List, Optional, Tuple
-from backend.security import get_tenant_id, encrypt_json, decrypt_json, DATA_DIR
+from backend.security import get_tenant_id, encrypt_json, decrypt_json, get_data_dir, DATA_DIR
 from backend.security_isolation import canonicalize_and_validate_path, SecurityPathTraversalError
 
 class TenantStorage:
     def __init__(self, email: str):
         self.email = email.strip().lower()
         self.tenant_id = get_tenant_id(self.email)
-        self.tenant_dir = os.path.join(DATA_DIR, "tenants", self.tenant_id)
+        data_dir = get_data_dir()
+        self.tenant_dir = os.path.join(data_dir, "tenants", self.tenant_id)
         self.media_dir = os.path.join(self.tenant_dir, "media")
         self.archives_dir = os.path.join(self.tenant_dir, "archives")
         self.user_data_dir = os.path.join(self.tenant_dir, "user_data")
@@ -111,7 +112,8 @@ class TenantStorage:
             "email": self.email,
             "children": [],
             "last_sync": None,
-            "sync_status": "idle"
+            "sync_status": "idle",
+            "scheduled_incremental": False
         }
 
     def save_config(self, config_data: Dict[str, Any]):

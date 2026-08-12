@@ -18,6 +18,7 @@ from backend.security import verify_jwt_token, create_jwt_token, get_tenant_id
 from backend.database import TenantStorage
 from backend.scraper_engine import ScraperJob, redownload_single_media_item
 from backend.archive_stream import start_zip_task, get_archive_status, range_stream_response, cancel_archive_task
+from backend.scheduler import start_background_scheduler
 
 app = FastAPI(title="Bright Horizons Photo Extractor API", version="2.0.0")
 
@@ -44,6 +45,7 @@ app.add_middleware(
 )
 
 _active_jobs: Dict[str, ScraperJob] = {}
+start_background_scheduler(_active_jobs)
 
 class LoginRequest(BaseModel):
     email: str
@@ -59,6 +61,9 @@ class ExtractionRequest(BaseModel):
     child: str = "all"
     force: bool = False
     password: Optional[str] = None
+
+class ScheduleRequest(BaseModel):
+    enabled: bool
 
 class ArchiveRequest(BaseModel):
     layout_mode: str = "flat"
@@ -373,7 +378,18 @@ def get_me(request: Request, authorization: Optional[str] = Header(None)):
         "token": token,
         "children": config.get("children", []),
         "session_expires_at": session_expires_at,
-        "last_sync": config.get("last_sync")
+        "last_sync": config.get("last_sync"),
+        "scheduled_incremental": config.get("scheduled_incremental", False)
+    }
+
+@app.post("/api/extraction/schedule")
+def set_extraction_schedule(req: ScheduleRequest, tenant: TenantStorage = Depends(get_current_tenant)):
+    config = tenant.load_config()
+    config["scheduled_incremental"] = req.enabled
+    tenant.save_config(config)
+    return {
+        "status": "success",
+        "scheduled_incremental": req.enabled
     }
 
 @app.delete("/api/auth/delete-account")
