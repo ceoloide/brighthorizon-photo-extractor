@@ -1652,6 +1652,7 @@ class ScraperJob:
             # Prepare download tasks and check manifest deduplication
             download_queue = []
             manifest = self.tenant_storage.load_manifest()
+            existing_items_count = 0
 
             for item in feed_items:
                 if self._cancelled:
@@ -1672,12 +1673,12 @@ class ScraperJob:
 
                 if existing_entry:
                     fn = existing_manifest_entry.get("original_filename", "media") if existing_manifest_entry else "media"
+                    existing_items_count += 1
                     if self.sync_mode == "incremental":
-                        self.log(f"[Incremental Sync] Hit existing item obj_id {obj_id[:8]}... ('{fn}'). Halting child feed scan.")
-                        return
+                        self.log(f"[Incremental Sync] Item obj_id {obj_id[:8]}... ('{fn}') already in manifest. Skipping.")
                     else:
                         self.log(f"[Skipped / Existing] Item obj_id {obj_id[:8]}... already downloaded as '{fn}'. Skipping.")
-                        continue
+                    continue
 
                 date_str = item.get("date_str") or parse_date(item.get("raw_date_text", ""), tf_text) or datetime.now().strftime("%Y-%m-%d")
                 
@@ -1694,6 +1695,9 @@ class ScraperJob:
                 })
 
             if not download_queue:
+                if self.sync_mode == "incremental" and existing_items_count > 0:
+                    self.log(f"[Incremental Sync] All {existing_items_count} items in timeframe '{tf_text}' already synced. Halting older timeframe scan for {child_name}.")
+                    break
                 continue
 
             # Calculate 2-digit zero-padded sequence numbers per date ((01), (02), ...)

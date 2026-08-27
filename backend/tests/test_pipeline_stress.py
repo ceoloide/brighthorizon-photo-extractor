@@ -673,8 +673,9 @@ class TestRunExtractionPipelineStress:
                 sync_mode="incremental"
             )
 
-            assert result["downloaded_count"] == 1
-            assert "photo_after_dup" not in result["manifest"]
+            assert result["downloaded_count"] == 2
+            assert "dup_photo" in result["manifest"]
+            assert "photo_after_dup" in result["manifest"]
 
     # -------------------------------------------------------------------------
     # 4.4 Corrupt & Non-Dictionary Manifest JSON Stress Tests

@@ -313,7 +313,8 @@ def run_extraction_pipeline(
         feed_items = dom_parser.extract_feed_items(page, timeframe_year=tf_year)
         log(f"Extracted {len(feed_items)} feed items for timeframe '{tf_text}'")
 
-        stop_incremental = False
+        tf_downloaded_count = 0
+        tf_existing_count = 0
         for item in feed_items:
             if cancel_checker and cancel_checker():
                 log("Extraction cancelled during feed item processing.")
@@ -339,13 +340,12 @@ def run_extraction_pipeline(
 
             # 6. Incremental Sync & Date Filtering
             if obj_id in manifest:
+                tf_existing_count += 1
                 if sync_mode == "incremental":
-                    log(f"Incremental sync: Item {obj_id} found in manifest. Halting feed scan for {child_name}.")
-                    stop_incremental = True
-                    break
+                    log(f"Incremental sync: Item {obj_id} already in manifest. Skipping.")
                 else:
                     skipped_count += 1
-                    continue
+                continue
 
             if start_date and date_str < start_date:
                 log(f"Item {obj_id} date {date_str} is prior to start_date {start_date}, skipping.")
@@ -434,9 +434,11 @@ def run_extraction_pipeline(
             }
 
             downloaded_count += 1
+            tf_downloaded_count += 1
             processed_count += 1
 
-        if stop_incremental:
+        if sync_mode == "incremental" and tf_downloaded_count == 0 and tf_existing_count > 0:
+            log(f"Incremental sync: All {tf_existing_count} items in timeframe '{tf_text}' already synced. Halting feed scan for {child_name}.")
             break
 
     # Save manifest back to disk

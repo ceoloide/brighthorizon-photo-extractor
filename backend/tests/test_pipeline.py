@@ -281,6 +281,62 @@ def test_run_extraction_pipeline_incremental(tmp_path):
         assert any("Halting feed scan" in m for m in logs)
 
 
+def test_run_extraction_pipeline_incremental_mixed_items(tmp_path):
+    """
+    Verifies that when a timeframe contains an older existing item followed by newer items,
+    incremental sync skips the existing item and successfully downloads the new item.
+    """
+    mock_page = MagicMock()
+    mock_page.url = "https://mybrightday.brighthorizons.com/dashboard/parents.html?dependent_id=dep123"
+
+    mock_response = MagicMock()
+    mock_response.ok = True
+    mock_response.body.return_value = b"\x89PNG\r\n\x1a\n" + b"\x00" * 50
+    mock_page.request.get.return_value = mock_response
+
+    output_dir = str(tmp_path / "downloads")
+    manifest_cache = {"photo_aug11": {"obj_id": "photo_aug11", "child": "Byron"}}
+
+    with patch("backend.dom_parser.parse_timeframe_links") as mock_parse_tf, \
+         patch("backend.dom_parser.extract_feed_items") as mock_extract_items, \
+         patch("backend.dom_parser.click_timeframe_tile"), \
+         patch("backend.dom_parser.dismiss_cdk_overlays"):
+
+        mock_parse_tf.return_value = [{"text": "aug 2026", "year": 2026, "locator": MagicMock()}]
+        mock_extract_items.return_value = [
+            {
+                "obj_id": "photo_aug11",
+                "date_str": "2026-08-11",
+                "is_video": False,
+                "download_url": "https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj=photo_aug11",
+                "comment": "Drawing"
+            },
+            {
+                "obj_id": "photo_aug25",
+                "date_str": "2026-08-25",
+                "is_video": False,
+                "download_url": "https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj=photo_aug25",
+                "comment": "Playground"
+            }
+        ]
+
+        logs = []
+        result = run_extraction_pipeline(
+            page=mock_page,
+            child_name="Byron",
+            dependent_id="dep123",
+            output_dir=output_dir,
+            sync_mode="incremental",
+            manifest_cache=manifest_cache,
+            logger=logs.append
+        )
+
+        assert result["status"] == "completed"
+        assert result["downloaded_count"] == 1
+        assert "photo_aug25" in result["manifest"]
+        assert any("Skipping" in m for m in logs)
+
+
 def test_run_extraction_pipeline_start_date(tmp_path):
     mock_page = MagicMock()
     mock_page.url = "https://mybrightday.brighthorizons.com/dashboard/parents.html?dependent_id=dep123"

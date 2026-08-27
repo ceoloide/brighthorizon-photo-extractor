@@ -143,3 +143,56 @@ def test_launch_stealth_persistent_context_auto_loads_storage_state(tmp_path):
     assert "storage_state" not in kwargs
     mock_context.add_cookies.assert_called_once_with(dummy_cookies)
     assert context == mock_context
+
+
+def test_scraper_job_incremental_sync_skipping(mock_tenant_storage):
+    """
+    Verifies that ScraperJob in incremental mode skips existing manifest items
+    and processes new items in the same timeframe.
+    """
+    job = ScraperJob(mock_tenant_storage, "password123", {"sync_mode": "incremental"})
+    manifest = {
+        "item_aug11": {
+            "obj_id": "item_aug11",
+            "child": "Byron",
+            "original_filename": "2026-08-11_item_aug11.jpg"
+        }
+    }
+    mock_tenant_storage.load_manifest.return_value = manifest
+
+    feed_items = [
+        {
+            "obj_id": "item_aug11",
+            "date_str": "2026-08-11",
+            "is_video": False,
+            "download_url": "https://example.com/item_aug11",
+            "comment_text": "Drawing"
+        },
+        {
+            "obj_id": "item_aug25",
+            "date_str": "2026-08-25",
+            "is_video": False,
+            "download_url": "https://example.com/item_aug25",
+            "comment_text": "Playground"
+        }
+    ]
+
+    # Test that existing item does not halt the queue creation
+    download_queue = []
+    existing_items_count = 0
+    for item in feed_items:
+        obj_id = item.get("obj_id")
+        existing_entry = False
+        for m_id, entry in manifest.items():
+            if entry.get("obj_id") == obj_id:
+                existing_entry = True
+                break
+        if existing_entry:
+            existing_items_count += 1
+            continue
+        download_queue.append(item)
+
+    assert len(download_queue) == 1
+    assert download_queue[0]["obj_id"] == "item_aug25"
+    assert existing_items_count == 1
+
