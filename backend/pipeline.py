@@ -271,6 +271,9 @@ def run_extraction_pipeline(
     if not tf_links:
         tf_links = [{"text": "current", "year": datetime.now().year, "locator": None}]
 
+    found_previously_downloaded = False
+    reached_custom_start_date = False
+
     for tf_item in tf_links:
         if cancel_checker and cancel_checker():
             log("Extraction cancelled during timeframe iteration.")
@@ -287,6 +290,14 @@ def run_extraction_pipeline(
 
         tf_text = tf_item.get("text", "")
         log(f"Processing timeframe tile: {tf_text}")
+
+        # Start Date Filter Check on Month Level
+        if sync_mode in ("incremental", "custom") and start_date:
+            m_end = dom_parser.get_month_end_date(tf_text)
+            if m_end and m_end < start_date:
+                log(f"Timeframe month '{tf_text}' (end date: {m_end}) is prior to custom start date {start_date}. Halting month scan for {child_name}.")
+                reached_custom_start_date = True
+                break
 
         if tf_item.get("locator") is not None:
             dom_parser.click_timeframe_tile(page, tf_item)
@@ -312,10 +323,88 @@ def run_extraction_pipeline(
 
         feed_items = dom_parser.extract_feed_items(page, timeframe_year=tf_year)
         log(f"Extracted {len(feed_items)} feed items for timeframe '{tf_text}'")
+        if not feed_items:
+            continue
 
-        tf_downloaded_count = 0
-        tf_existing_count = 0
+        # Ensure all feed items have date_str resolved
         for item in feed_items:
+            if not item.get("date_str"):
+                item["date_str"] = f"{datetime.now().year:04d}-01-01"
+
+        # Sort feed items descending by date only in incremental/custom modes
+        if sync_mode in ("incremental", "custom"):
+            feed_items.sort(key=lambda x: x.get("date_str", ""), reverse=True)
+
+        download_queue = []
+        seen_in_queue = set()
+        max_downloaded_date = None
+
+        if sync_mode in ("incremental", "custom"):
+            # Step 1: Check for already downloaded pictures
+            for item in feed_items:
+                obj_id = item.get("obj_id")
+                if not obj_id:
+                    continue
+                if obj_id in manifest:
+                    found_previously_downloaded = True
+                    item_date = item.get("date_str")
+                    if max_downloaded_date is None or (item_date and item_date > max_downloaded_date):
+                        max_downloaded_date = item_date
+
+            # Step 2: Check for reaching custom start date
+            if (sync_mode == "custom" or start_date) and start_date:
+                for item in feed_items:
+                    item_date = item.get("date_str")
+                    if item_date and item_date < start_date:
+                        reached_custom_start_date = True
+                        break
+
+            # Step 3: Remove already downloaded items, all that are older than max_downloaded_date,
+            # and all that are older than custom start date
+            for item in feed_items:
+                obj_id = item.get("obj_id")
+                if not obj_id:
+                    continue
+                item_date = item.get("date_str")
+
+                if (sync_mode == "custom" or start_date) and start_date and item_date and item_date < start_date:
+                    log(f"[Cutoff / Start Date] Item {obj_id[:8]} ({item_date}) is prior to custom start date {start_date}. Skipping.")
+                    skipped_count += 1
+                    continue
+
+                if obj_id in manifest:
+                    log(f"[Cutoff / Previously Downloaded] Item {obj_id[:8]} ({item_date}) already in manifest. Skipping.")
+                    skipped_count += 1
+                    continue
+
+                if max_downloaded_date and item_date and item_date < max_downloaded_date:
+                    log(f"[Cutoff / Older Than Downloaded] Item {obj_id[:8]} ({item_date}) is older than downloaded cutoff ({max_downloaded_date}). Skipping.")
+                    skipped_count += 1
+                    continue
+
+                if obj_id in seen_in_queue:
+                    continue
+                seen_in_queue.add(obj_id)
+                download_queue.append(item)
+        else:
+            for item in feed_items:
+                obj_id = item.get("obj_id")
+                if not obj_id:
+                    continue
+                item_date = item.get("date_str")
+                if start_date and item_date < start_date:
+                    log(f"Item {obj_id} date {item_date} is prior to start_date {start_date}, skipping.")
+                    skipped_count += 1
+                    continue
+                if obj_id in manifest:
+                    skipped_count += 1
+                    continue
+                if obj_id in seen_in_queue:
+                    continue
+                seen_in_queue.add(obj_id)
+                download_queue.append(item)
+
+        for item in download_queue:
             if cancel_checker and cancel_checker():
                 log("Extraction cancelled during feed item processing.")
                 save_manifest_to_disk()
@@ -337,20 +426,6 @@ def run_extraction_pipeline(
             is_video = item.get("is_video", False)
             download_url = item.get("download_url")
             raw_comment = item.get("comment", "")
-
-            # 6. Incremental Sync & Date Filtering
-            if obj_id in manifest:
-                tf_existing_count += 1
-                if sync_mode == "incremental":
-                    log(f"Incremental sync: Item {obj_id} already in manifest. Skipping.")
-                else:
-                    skipped_count += 1
-                continue
-
-            if start_date and date_str < start_date:
-                log(f"Item {obj_id} date {date_str} is prior to start_date {start_date}, skipping.")
-                skipped_count += 1
-                continue
 
             if not download_url:
                 log(f"No download URL for item {obj_id}, skipping.")
@@ -434,12 +509,16 @@ def run_extraction_pipeline(
             }
 
             downloaded_count += 1
-            tf_downloaded_count += 1
             processed_count += 1
 
-        if sync_mode == "incremental" and tf_downloaded_count == 0 and tf_existing_count > 0:
-            log(f"Incremental sync: All {tf_existing_count} items in timeframe '{tf_text}' already synced. Halting feed scan for {child_name}.")
-            break
+        # Explicit continuation check after all downloads in the timeframe are processed
+        if sync_mode in ("incremental", "custom"):
+            if found_previously_downloaded:
+                log(f"Incremental sync: Found previously downloaded pictures in timeframe '{tf_text}'. Halting feed scan for {child_name}.")
+                break
+            if reached_custom_start_date:
+                log(f"Custom sync: Reached custom start date cutoff ({start_date}) in timeframe '{tf_text}'. Halting feed scan for {child_name}.")
+                break
 
     # Save manifest back to disk
     os.makedirs(output_dir, exist_ok=True)

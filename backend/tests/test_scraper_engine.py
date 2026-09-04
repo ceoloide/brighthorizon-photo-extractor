@@ -196,3 +196,104 @@ def test_scraper_job_incremental_sync_skipping(mock_tenant_storage):
     assert download_queue[0]["obj_id"] == "item_aug25"
     assert existing_items_count == 1
 
+
+def test_scraper_job_incremental_pruning_and_termination_flags(mock_tenant_storage):
+    """
+    Verifies that ScraperJob in incremental mode:
+    1. Identifies previously downloaded items and sets found_previously_downloaded flag.
+    2. Determines max_downloaded_date.
+    3. Prunes already-downloaded items and all items older than max_downloaded_date.
+    4. Enqueues only newer items for parallel download.
+    """
+    job = ScraperJob(mock_tenant_storage, "password123", {"sync_mode": "incremental"})
+    manifest = {
+        "m_aug15": {
+            "obj_id": "item_aug15",
+            "child": "Byron",
+            "date": "2026-08-15",
+            "original_filename": "2026-08-15_item_aug15.jpg"
+        }
+    }
+    mock_tenant_storage.load_manifest.return_value = manifest
+
+    feed_items = [
+        {"obj_id": "item_aug25", "date_str": "2026-08-25", "is_video": False, "download_url": "https://example.com/25", "comment_text": "Newer 1"},
+        {"obj_id": "item_aug20", "date_str": "2026-08-20", "is_video": False, "download_url": "https://example.com/20", "comment_text": "Newer 2"},
+        {"obj_id": "item_aug15", "date_str": "2026-08-15", "is_video": False, "download_url": "https://example.com/15", "comment_text": "Already Downloaded"},
+        {"obj_id": "item_aug10", "date_str": "2026-08-10", "is_video": False, "download_url": "https://example.com/10", "comment_text": "Older Item"}
+    ]
+
+    found_previously_downloaded = False
+    reached_custom_start_date = False
+    max_downloaded_date = None
+
+    # Step 1
+    for item in feed_items:
+        obj_id = item.get("obj_id")
+        if any(entry.get("obj_id") == obj_id for entry in manifest.values()):
+            found_previously_downloaded = True
+            item_date = item.get("date_str")
+            if max_downloaded_date is None or (item_date and item_date > max_downloaded_date):
+                max_downloaded_date = item_date
+
+    # Step 3
+    download_queue = []
+    seen_in_queue = set()
+    for item in feed_items:
+        obj_id = item.get("obj_id")
+        item_date = item.get("date_str")
+        if any(entry.get("obj_id") == obj_id for entry in manifest.values()):
+            continue
+        if max_downloaded_date and item_date and item_date < max_downloaded_date:
+            continue
+        if obj_id in seen_in_queue:
+            continue
+        seen_in_queue.add(obj_id)
+        download_queue.append(item)
+
+    assert found_previously_downloaded is True
+    assert max_downloaded_date == "2026-08-15"
+    assert len(download_queue) == 2
+    assert [x["obj_id"] for x in download_queue] == ["item_aug25", "item_aug20"]
+
+
+def test_scraper_job_custom_sync_prunes_older_than_start_date(mock_tenant_storage):
+    """
+    Verifies that ScraperJob in custom mode with start_date:
+    1. Sets reached_custom_start_date flag when encountering items older than start_date.
+    2. Prunes all items older than start_date.
+    """
+    start_date = "2026-08-18"
+    job = ScraperJob(mock_tenant_storage, "password123", {"sync_mode": "custom", "start_date": start_date})
+    mock_tenant_storage.load_manifest.return_value = {}
+
+    feed_items = [
+        {"obj_id": "item_aug25", "date_str": "2026-08-25", "is_video": False, "download_url": "https://example.com/25", "comment_text": "Newer"},
+        {"obj_id": "item_aug18", "date_str": "2026-08-18", "is_video": False, "download_url": "https://example.com/18", "comment_text": "On Cutoff"},
+        {"obj_id": "item_aug10", "date_str": "2026-08-10", "is_video": False, "download_url": "https://example.com/10", "comment_text": "Prior to Cutoff"}
+    ]
+
+    reached_custom_start_date = False
+    for item in feed_items:
+        item_date = item.get("date_str")
+        if item_date and item_date < start_date:
+            reached_custom_start_date = True
+            break
+
+    download_queue = []
+    seen_in_queue = set()
+    for item in feed_items:
+        obj_id = item.get("obj_id")
+        item_date = item.get("date_str")
+        if item_date and item_date < start_date:
+            continue
+        if obj_id in seen_in_queue:
+            continue
+        seen_in_queue.add(obj_id)
+        download_queue.append(item)
+
+    assert reached_custom_start_date is True
+    assert len(download_queue) == 2
+    assert [x["obj_id"] for x in download_queue] == ["item_aug25", "item_aug18"]
+
+

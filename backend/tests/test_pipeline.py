@@ -337,6 +337,248 @@ def test_run_extraction_pipeline_incremental_mixed_items(tmp_path):
         assert any("Skipping" in m for m in logs)
 
 
+def test_run_extraction_pipeline_incremental_stops_after_downloading_month_with_existing_items(tmp_path):
+    """
+    Verifies that incremental sync downloads new items in a month containing both new and previously
+    downloaded items, and then halts immediately without navigating to or processing the older month.
+    """
+    mock_page = MagicMock()
+    mock_page.url = "https://mybrightday.brighthorizons.com/dashboard/parents.html?dependent_id=dep123"
+
+    mock_response = MagicMock()
+    mock_response.ok = True
+    mock_response.body.return_value = create_minimal_png_bytes()
+    mock_page.request.get.return_value = mock_response
+
+    output_dir = str(tmp_path / "downloads")
+    manifest_cache = {"photo_aug11": {"obj_id": "photo_aug11", "child": "Byron"}}
+
+    with patch("backend.dom_parser.parse_timeframe_links") as mock_parse_tf, \
+         patch("backend.dom_parser.extract_feed_items") as mock_extract_items, \
+         patch("backend.dom_parser.click_timeframe_tile") as mock_click_tf, \
+         patch("backend.dom_parser.dismiss_cdk_overlays"):
+
+        aug_locator = MagicMock()
+        jul_locator = MagicMock()
+        mock_parse_tf.return_value = [
+            {"text": "aug 2026", "year": 2026, "locator": aug_locator},
+            {"text": "jul 2026", "year": 2026, "locator": jul_locator},
+        ]
+
+        def side_effect_extract(page, timeframe_year=None, logger=None):
+            if mock_click_tf.call_count <= 1:
+                return [
+                    {
+                        "obj_id": "photo_aug25",
+                        "date_str": "2026-08-25",
+                        "is_video": False,
+                        "download_url": "https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj=photo_aug25",
+                        "comment": "New Aug 25 Photo"
+                    },
+                    {
+                        "obj_id": "photo_aug11",
+                        "date_str": "2026-08-11",
+                        "is_video": False,
+                        "download_url": "https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj=photo_aug11",
+                        "comment": "Existing Aug 11 Photo"
+                    }
+                ]
+            return [
+                {
+                    "obj_id": "photo_jul10",
+                    "date_str": "2026-07-10",
+                    "is_video": False,
+                    "download_url": "https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj=photo_jul10",
+                    "comment": "Jul Photo"
+                }
+            ]
+
+        mock_extract_items.side_effect = side_effect_extract
+
+        logs = []
+        result = run_extraction_pipeline(
+            page=mock_page,
+            child_name="Byron",
+            dependent_id="dep123",
+            output_dir=output_dir,
+            sync_mode="incremental",
+            manifest_cache=manifest_cache,
+            logger=logs.append
+        )
+
+        assert result["status"] == "completed"
+        assert result["downloaded_count"] == 1
+        assert "photo_aug25" in result["manifest"]
+        assert "photo_jul10" not in result["manifest"]
+        # Crucial check: July tile must NEVER be clicked
+        assert mock_click_tf.call_count == 1
+        assert mock_click_tf.call_args[0][1]["text"] == "aug 2026"
+        assert any("Halting feed scan" in m for m in logs)
+
+
+def test_run_extraction_pipeline_incremental_empty_month_traversal(tmp_path):
+    """
+    Verifies that an empty month does NOT trigger termination and allows traversal
+    to earlier months until a previously downloaded cutoff is encountered.
+    """
+    mock_page = MagicMock()
+    mock_page.url = "https://mybrightday.brighthorizons.com/dashboard/parents.html?dependent_id=dep123"
+
+    mock_response = MagicMock()
+    mock_response.ok = True
+    mock_response.body.return_value = create_minimal_png_bytes()
+    mock_page.request.get.return_value = mock_response
+
+    output_dir = str(tmp_path / "downloads")
+    manifest_cache = {"photo_jul10": {"obj_id": "photo_jul10", "child": "Byron"}}
+
+    with patch("backend.dom_parser.parse_timeframe_links") as mock_parse_tf, \
+         patch("backend.dom_parser.extract_feed_items") as mock_extract_items, \
+         patch("backend.dom_parser.click_timeframe_tile") as mock_click_tf, \
+         patch("backend.dom_parser.dismiss_cdk_overlays"):
+
+        aug_locator = MagicMock()
+        jul_locator = MagicMock()
+        jun_locator = MagicMock()
+        mock_parse_tf.return_value = [
+            {"text": "aug 2026", "year": 2026, "locator": aug_locator},
+            {"text": "jul 2026", "year": 2026, "locator": jul_locator},
+            {"text": "jun 2026", "year": 2026, "locator": jun_locator},
+        ]
+
+        def side_effect_extract(page, timeframe_year=None, logger=None):
+            # 1st call: Aug (empty)
+            if mock_click_tf.call_count == 1:
+                return []
+            # 2nd call: Jul (has new + existing)
+            elif mock_click_tf.call_count == 2:
+                return [
+                    {
+                        "obj_id": "photo_jul20",
+                        "date_str": "2026-07-20",
+                        "is_video": False,
+                        "download_url": "https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj=photo_jul20",
+                        "comment": "Jul 20 Photo"
+                    },
+                    {
+                        "obj_id": "photo_jul10",
+                        "date_str": "2026-07-10",
+                        "is_video": False,
+                        "download_url": "https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj=photo_jul10",
+                        "comment": "Jul 10 Photo"
+                    }
+                ]
+            # 3rd call: Jun (should never be reached)
+            return [
+                {
+                    "obj_id": "photo_jun01",
+                    "date_str": "2026-06-01",
+                    "is_video": False,
+                    "download_url": "https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj=photo_jun01",
+                    "comment": "Jun Photo"
+                }
+            ]
+
+        mock_extract_items.side_effect = side_effect_extract
+
+        logs = []
+        result = run_extraction_pipeline(
+            page=mock_page,
+            child_name="Byron",
+            dependent_id="dep123",
+            output_dir=output_dir,
+            sync_mode="incremental",
+            manifest_cache=manifest_cache,
+            logger=logs.append
+        )
+
+        assert result["status"] == "completed"
+        assert result["downloaded_count"] == 1
+        assert "photo_jul20" in result["manifest"]
+        assert "photo_jun01" not in result["manifest"]
+        # Aug and Jul tiles clicked; Jun tile NEVER clicked
+        assert mock_click_tf.call_count == 2
+        assert any("Halting feed scan" in m for m in logs)
+
+
+def test_run_extraction_pipeline_custom_start_date_cutoff(tmp_path):
+    """
+    Verifies that custom sync downloads items down to start_date, prunes items older than start_date,
+    and cleanly halts without visiting older months.
+    """
+    mock_page = MagicMock()
+    mock_page.url = "https://mybrightday.brighthorizons.com/dashboard/parents.html?dependent_id=dep123"
+
+    mock_response = MagicMock()
+    mock_response.ok = True
+    mock_response.body.return_value = create_minimal_png_bytes()
+    mock_page.request.get.return_value = mock_response
+
+    output_dir = str(tmp_path / "downloads")
+
+    with patch("backend.dom_parser.parse_timeframe_links") as mock_parse_tf, \
+         patch("backend.dom_parser.extract_feed_items") as mock_extract_items, \
+         patch("backend.dom_parser.click_timeframe_tile") as mock_click_tf, \
+         patch("backend.dom_parser.dismiss_cdk_overlays"):
+
+        aug_locator = MagicMock()
+        jul_locator = MagicMock()
+        mock_parse_tf.return_value = [
+            {"text": "aug 2026", "year": 2026, "locator": aug_locator},
+            {"text": "jul 2026", "year": 2026, "locator": jul_locator},
+        ]
+
+        def side_effect_extract(page, timeframe_year=None, logger=None):
+            if mock_click_tf.call_count == 1:
+                return [
+                    {
+                        "obj_id": "photo_aug20",
+                        "date_str": "2026-08-20",
+                        "is_video": False,
+                        "download_url": "https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj=photo_aug20",
+                        "comment": "Aug 20 Photo"
+                    },
+                    {
+                        "obj_id": "photo_aug10",
+                        "date_str": "2026-08-10",
+                        "is_video": False,
+                        "download_url": "https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj=photo_aug10",
+                        "comment": "Aug 10 Photo"
+                    }
+                ]
+            return [
+                {
+                    "obj_id": "photo_jul05",
+                    "date_str": "2026-07-05",
+                    "is_video": False,
+                    "download_url": "https://mybrightday.brighthorizons.com/remote/v1/obj_attachment?obj=photo_jul05",
+                    "comment": "Jul 05 Photo"
+                }
+            ]
+
+        mock_extract_items.side_effect = side_effect_extract
+
+        logs = []
+        result = run_extraction_pipeline(
+            page=mock_page,
+            child_name="Byron",
+            dependent_id="dep123",
+            output_dir=output_dir,
+            sync_mode="custom",
+            start_date="2026-08-15",
+            logger=logs.append
+        )
+
+        assert result["status"] == "completed"
+        assert result["downloaded_count"] == 1
+        assert "photo_aug20" in result["manifest"]
+        assert "photo_aug10" not in result["manifest"]
+        assert "photo_jul05" not in result["manifest"]
+        # July tile must NEVER be clicked
+        assert mock_click_tf.call_count == 1
+        assert any("Reached custom start date cutoff" in m for m in logs)
+
+
 def test_run_extraction_pipeline_start_date(tmp_path):
     mock_page = MagicMock()
     mock_page.url = "https://mybrightday.brighthorizons.com/dashboard/parents.html?dependent_id=dep123"

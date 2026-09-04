@@ -1554,6 +1554,9 @@ class ScraperJob:
         self.status["current_child"] = child_name
         manifest = self.tenant_storage.load_manifest()
         
+        found_previously_downloaded = False
+        reached_custom_start_date = False
+
         for tf_text in month_names:
             if self._cancelled:
                 self.log("Extraction cancelled by user.")
@@ -1562,10 +1565,11 @@ class ScraperJob:
             self.status["current_month"] = tf_text
             
             # Start Date Filter Check
-            if self.start_date:
+            if (self.sync_mode == "custom" or self.start_date) and self.start_date:
                 m_end = get_month_end_date(tf_text)
                 if m_end and m_end < self.start_date:
-                    self.log(f"Timeframe month '{tf_text}' (end date: {m_end}) is prior to start date {self.start_date}. Halting month scan for {child_name}.")
+                    self.log(f"Timeframe month '{tf_text}' (end date: {m_end}) is prior to custom start date {self.start_date}. Halting month scan for {child_name}.")
+                    reached_custom_start_date = True
                     break
 
             try:
@@ -1648,56 +1652,128 @@ class ScraperJob:
                     })
 
             self.log(f"Extracted {len(feed_items)} feed items from timeframe {tf_text}.")
-            
-            # Prepare download tasks and check manifest deduplication
-            download_queue = []
+            if not feed_items:
+                continue
+
             manifest = self.tenant_storage.load_manifest()
-            existing_items_count = 0
 
+            # Ensure all feed items have date_str resolved
             for item in feed_items:
-                if self._cancelled:
-                    self.log("Extraction cancelled by user.")
-                    return
+                if not item.get("date_str"):
+                    item["date_str"] = parse_date(item.get("raw_date_text", ""), tf_text) or datetime.now().strftime("%Y-%m-%d")
 
-                obj_id = item.get("obj_id")
-                if not obj_id:
-                    continue
+            # Sort feed items descending by date only for incremental/custom modes
+            if self.sync_mode in ("incremental", "custom"):
+                feed_items.sort(key=lambda x: x.get("date_str", ""), reverse=True)
 
-                existing_entry = False
-                existing_manifest_entry = None
-                for m_id, entry in manifest.items():
-                    if entry.get("obj_id") == obj_id:
-                        existing_entry = True
-                        existing_manifest_entry = entry
-                        break
+            download_queue = []
+            seen_in_queue = set()
+            max_downloaded_date = None
 
-                if existing_entry:
-                    fn = existing_manifest_entry.get("original_filename", "media") if existing_manifest_entry else "media"
-                    existing_items_count += 1
-                    if self.sync_mode == "incremental":
-                        self.log(f"[Incremental Sync] Item obj_id {obj_id[:8]}... ('{fn}') already in manifest. Skipping.")
-                    else:
-                        self.log(f"[Skipped / Existing] Item obj_id {obj_id[:8]}... already downloaded as '{fn}'. Skipping.")
-                    continue
+            if self.sync_mode in ("incremental", "custom"):
+                # Step 1: Check for already downloaded pictures
+                for item in feed_items:
+                    obj_id = item.get("obj_id")
+                    if not obj_id:
+                        continue
+                    is_existing = any(entry.get("obj_id") == obj_id for entry in manifest.values())
+                    if is_existing:
+                        found_previously_downloaded = True
+                        item_date = item.get("date_str")
+                        if max_downloaded_date is None or (item_date and item_date > max_downloaded_date):
+                            max_downloaded_date = item_date
 
-                date_str = item.get("date_str") or parse_date(item.get("raw_date_text", ""), tf_text) or datetime.now().strftime("%Y-%m-%d")
-                
-                if self.start_date and date_str < self.start_date:
-                    self.log(f"Post date {date_str} is before custom start date {self.start_date}. Skipping.")
-                    continue
+                # Step 2: Check for reaching custom start date
+                if (self.sync_mode == "custom" or self.start_date) and self.start_date:
+                    for item in feed_items:
+                        item_date = item.get("date_str")
+                        if item_date and item_date < self.start_date:
+                            reached_custom_start_date = True
+                            break
 
-                download_queue.append({
-                    "obj_id": obj_id,
-                    "is_video": item.get("is_video", False),
-                    "download_url": item.get("download_url"),
-                    "date_str": date_str,
-                    "comment": item.get("comment_text", "")
-                })
+                # Step 3: Remove already downloaded items, all that are older than max_downloaded_date,
+                # and all that are older than custom start date
+                for item in feed_items:
+                    if self._cancelled:
+                        self.log("Extraction cancelled by user.")
+                        return
+
+                    obj_id = item.get("obj_id")
+                    if not obj_id:
+                        continue
+
+                    item_date = item.get("date_str")
+
+                    # Remove if older than custom start date
+                    if (self.sync_mode == "custom" or self.start_date) and self.start_date and item_date and item_date < self.start_date:
+                        self.log(f"[Cutoff / Start Date] Item {obj_id[:8]} ({item_date}) is prior to custom start date {self.start_date}. Excluding.")
+                        continue
+
+                    # Remove if already downloaded
+                    is_existing = any(entry.get("obj_id") == obj_id for entry in manifest.values())
+                    if is_existing:
+                        self.log(f"[Cutoff / Previously Downloaded] Item {obj_id[:8]} ({item_date}) already in manifest. Excluding.")
+                        continue
+
+                    # Remove if older than the newest downloaded item in this timeframe
+                    if max_downloaded_date and item_date and item_date < max_downloaded_date:
+                        self.log(f"[Cutoff / Older Than Downloaded] Item {obj_id[:8]} ({item_date}) is older than downloaded cutoff ({max_downloaded_date}). Excluding.")
+                        continue
+
+                    if obj_id in seen_in_queue:
+                        continue
+                    seen_in_queue.add(obj_id)
+
+                    download_queue.append({
+                        "obj_id": obj_id,
+                        "is_video": item.get("is_video", False),
+                        "download_url": item.get("download_url"),
+                        "date_str": item_date,
+                        "comment": item.get("comment_text", "")
+                    })
+            else:
+                # Full mode: only deduplicate existing items without pruning older items
+                for item in feed_items:
+                    if self._cancelled:
+                        self.log("Extraction cancelled by user.")
+                        return
+
+                    obj_id = item.get("obj_id")
+                    if not obj_id:
+                        continue
+
+                    item_date = item.get("date_str")
+                    if self.start_date and item_date and item_date < self.start_date:
+                        self.log(f"[Start Date Filter] Item {obj_id[:8]} ({item_date}) is prior to custom start date {self.start_date}. Skipping.")
+                        continue
+
+                    is_existing = any(entry.get("obj_id") == obj_id for entry in manifest.values())
+                    if is_existing:
+                        self.log(f"[Skipped / Existing] Item obj_id {obj_id[:8]} ({item_date}) already downloaded. Skipping.")
+                        continue
+
+                    if obj_id in seen_in_queue:
+                        continue
+                    seen_in_queue.add(obj_id)
+
+                    download_queue.append({
+                        "obj_id": obj_id,
+                        "is_video": item.get("is_video", False),
+                        "download_url": item.get("download_url"),
+                        "date_str": item_date,
+                        "comment": item.get("comment_text", "")
+                    })
 
             if not download_queue:
-                if self.sync_mode == "incremental" and existing_items_count > 0:
-                    self.log(f"[Incremental Sync] All {existing_items_count} items in timeframe '{tf_text}' already synced. Halting older timeframe scan for {child_name}.")
-                    break
+                self.log(f"No new media items to download in timeframe '{tf_text}'.")
+                # Explicit check if we should halt before next month
+                if self.sync_mode in ("incremental", "custom"):
+                    if found_previously_downloaded:
+                        self.log(f"[Incremental Sync] Found previously downloaded pictures in timeframe '{tf_text}'. Halting extraction for {child_name}.")
+                        break
+                    if reached_custom_start_date:
+                        self.log(f"[Custom Sync] Reached custom start date cutoff ({self.start_date}) in timeframe '{tf_text}'. Halting extraction for {child_name}.")
+                        break
                 continue
 
             # Calculate 2-digit zero-padded sequence numbers per date ((01), (02), ...)
@@ -1856,6 +1932,15 @@ class ScraperJob:
                 raise RuntimeError(err_msg)
 
             self.log(f"Completed timeframe {tf_text}: all {success_count}/{total_expected} items successfully downloaded.")
+
+            # Explicit termination check after processing downloads for the timeframe
+            if self.sync_mode in ("incremental", "custom"):
+                if found_previously_downloaded:
+                    self.log(f"[Incremental Sync] Found previously downloaded pictures in timeframe '{tf_text}'. Halting extraction for {child_name} (older months already synced).")
+                    break
+                if reached_custom_start_date:
+                    self.log(f"[Custom Sync] Reached custom start date cutoff ({self.start_date}) in timeframe '{tf_text}'. Halting extraction for {child_name}.")
+                    break
 
     def scroll_and_load(self, page: Page):
         """Scrolls down the page until no new content is loaded to ensure all photos are rendered (ported from working main.py skill code)."""
