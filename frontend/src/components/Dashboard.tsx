@@ -521,14 +521,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ token, email, childrenList
                 className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 sm:py-2 text-xs text-slate-800 focus:border-indigo-600 outline-none transition font-medium disabled:opacity-50"
               >
                 <option value="all">All Enrolled Children</option>
-                {childrenList && childrenList.map((c: any, i: number) => {
-                  const name = typeof c === 'string' ? c : c.name;
-                  return (
-                    <option key={i} value={name.toLowerCase()}>
-                      {name}
-                    </option>
-                  );
-                })}
+                {childrenList && Array.from(new Set(childrenList.map((c: any) => typeof c === 'string' ? c : c.name))).map((name: string, i: number) => (
+                  <option key={i} value={name.toLowerCase()}>
+                    {name}
+                  </option>
+                ))}
               </select>
             </div>
 

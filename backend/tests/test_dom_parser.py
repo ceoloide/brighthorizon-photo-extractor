@@ -12,6 +12,7 @@ from backend.dom_parser import (
     click_timeframe_tile,
     extract_feed_items,
     discover_children_from_family_info,
+    discover_children_from_parents_params,
     dismiss_cdk_overlays
 )
 
@@ -270,5 +271,55 @@ def test_wait_for_month_feed_ready_timeout_error():
 
     assert "Max wait time" in str(exc_info.value)
     assert "jun 2026" in str(exc_info.value)
+
+
+def test_discover_children_from_parents_params_multi_center():
+    mock_page = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.json.return_value = {
+        "children": [
+            {
+                "first_name": "Theodore",
+                "last_name": "Weiss-Papaioannou",
+                "key": "665a6a5e1baa04a19f8681ab",
+                "attachment": "6a03594bebd79a252224a5af",
+                "location_name": "River School West Side"
+            },
+            {
+                "first_name": "Alice",
+                "last_name": "Weiss-Papaioannou",
+                "key": "6a84c09187e6316a97724f9a",
+                "attachment": None,
+                "location_name": "Bright Horizons at West 72nd"
+            },
+            {
+                "first_name": "Theodore",
+                "last_name": "Weiss-Papaioannou",
+                "key": "6a84c09287e6316a97724f9e",
+                "attachment": None,
+                "location_name": "Bright Horizons at West 72nd"
+            }
+        ]
+    }
+    mock_page.request.get.return_value = mock_resp
+
+    children = discover_children_from_parents_params(mock_page)
+    assert len(children) == 3
+    # Both Theodore center profiles preserved with same given name "Theodore"
+    theodores = [c for c in children if c["name"] == "Theodore"]
+    assert len(theodores) == 2
+    assert theodores[0]["dependent_id"] == "665a6a5e1baa04a19f8681ab"
+    assert theodores[0]["location_name"] == "River School West Side"
+    assert theodores[0]["attachment_key"] == "6a03594bebd79a252224a5af"
+
+    assert theodores[1]["dependent_id"] == "6a84c09287e6316a97724f9e"
+    assert theodores[1]["location_name"] == "Bright Horizons at West 72nd"
+    assert theodores[1]["attachment_key"] is None
+
+    alices = [c for c in children if c["name"] == "Alice"]
+    assert len(alices) == 1
+    assert alices[0]["dependent_id"] == "6a84c09187e6316a97724f9a"
+
 
 

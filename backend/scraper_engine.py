@@ -626,7 +626,8 @@ class ScraperJob:
                     matching = [c for c in children_to_process if c.get("name", "").strip().lower() == target_clean or c.get("name", "").strip().lower().startswith(target_clean)]
                     if matching:
                         children = matching
-                        self.log(f"Target child '{matching[0]['name']}' selected. Processing single child feed directly.")
+                        centers_desc = ", ".join(c.get("location_name", "Center") for c in matching if c.get("location_name"))
+                        self.log(f"Target child '{matching[0]['name']}' selected ({len(matching)} center profile(s): {centers_desc or 'Default'}). Processing all center feeds.")
                     else:
                         raise Exception(f"Selected target child '{self.target_child}' was not found among enrolled children.")
                 else:
@@ -1483,14 +1484,25 @@ class ScraperJob:
                 except Exception: pass
 
     def discover_children(self, page: Page, context: BrowserContext) -> List[Dict[str, str]]:
-        """Discovers active children and their dependent_ids following Angular CDK rules in .agents/AGENTS.md."""
+        """
+        Discovers enrolled children across all centers.
+        First queries /legacy/parents/params for comprehensive multi-center profiles,
+        then falls back to Family Info Center Angular DOM discovery if needed.
+        """
         try:
-            from backend.dom_parser import discover_children_from_family_info
+            from backend.dom_parser import discover_children_from_parents_params, discover_children_from_family_info
+
+            # Fast path: query /legacy/parents/params directly
+            discovered = discover_children_from_parents_params(page, logger=self.log)
+            if discovered:
+                self.log(f"Child auto-discovery via My Bright Day API found {len(discovered)} profile(s): {[(c['name'], c.get('location_name', '')) for c in discovered]}")
+                return discovered
+
             discovered = discover_children_from_family_info(page, context, logger=self.log)
             if discovered:
                 return discovered
         except Exception as e:
-            self.log(f"Child auto-discovery via dom_parser notice: {e}")
+            self.log(f"Child auto-discovery notice: {e}")
 
         self.log("Child auto-discovery completed: 0 specific child profiles found.")
         return []
@@ -1499,24 +1511,46 @@ class ScraperJob:
         """Navigates child timeline, handles timeframe links, and extracts all feed items."""
         child_name = child["name"]
         dep_id = child["dependent_id"]
-        
-        self.log(f"Processing feed for {child_name} (Sync Mode: {self.sync_mode.upper()})...")
+        loc_name = child.get("location_name") or ""
+        center_tag = f" [{loc_name}]" if loc_name else ""
+
+        self.log(f"Processing feed for {child_name}{center_tag} (ID: {dep_id}) (Sync Mode: {self.sync_mode.upper()})...")
         url = f"https://mybrightday.brighthorizons.com/dashboard/parents.html?dependent_id={dep_id}"
         page.goto(url, wait_until="domcontentloaded")
         time.sleep(3.0)
-        
-        # Check if child tile needs to be clicked to trigger Knockout.js month links
+
+        # Verify active child selection.
+        # When navigating with ?dependent_id=..., Knockout.js auto-selects the child matching dependent_id.
+        # We do NOT perform blind text matching across the page, which breaks on multi-center
+        # accounts or when tiles have profile images (omitting text labels).
         try:
-            tiles = page.locator("li, div.tile, a, span").all()
-            for el in tiles:
-                txt = el.inner_text().strip().lower()
-                if txt == child_name.strip().lower() or txt.startswith(child_name.strip().lower()):
-                    self.log(f"Clicking child selection tile for '{child_name}'...")
-                    el.click()
-                    time.sleep(2.0)
-                    break
-        except Exception:
-            pass
+            att_key = child.get("attachment_key")
+            page.evaluate("""
+                (depId, attKey) => {
+                    const topUl = document.querySelector('div.pull-right ul.thumbnails') || 
+                                  Array.from(document.querySelectorAll('ul.thumbnails')).find(u => !u.closest('div.well'));
+                    if (!topUl) return true;
+
+                    const selectedTile = topUl.querySelector('div.tile.selected');
+                    if (selectedTile) {
+                        if (attKey && selectedTile.getAttribute('data-attachment-key') === attKey) {
+                            return true;
+                        }
+                        return true;
+                    }
+
+                    if (attKey) {
+                        const matchTile = topUl.querySelector(`div.tile[data-attachment-key="${attKey}"]`);
+                        if (matchTile) {
+                            matchTile.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            """, dep_id, att_key)
+        except Exception as sel_err:
+            self.log(f"Child selector verification notice: {sel_err}")
             
         # Dynamic wait up to 45s for Knockout.js timeframe month links to populate
         month_names = []

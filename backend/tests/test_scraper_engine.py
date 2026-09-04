@@ -297,3 +297,46 @@ def test_scraper_job_custom_sync_prunes_older_than_start_date(mock_tenant_storag
     assert [x["obj_id"] for x in download_queue] == ["item_aug25", "item_aug18"]
 
 
+def test_scraper_engine_multi_center_target_matching(mock_tenant_storage):
+    """
+    Verifies that target_child matching matches all center profiles for the given child.
+    """
+    job = ScraperJob(mock_tenant_storage, "password123", {"child": "Theodore"})
+    all_children = [
+        {"name": "Theodore", "dependent_id": "dep_center_1", "location_name": "River School West Side"},
+        {"name": "Alice", "dependent_id": "dep_center_alice", "location_name": "Bright Horizons at West 72nd"},
+        {"name": "Theodore", "dependent_id": "dep_center_2", "location_name": "Bright Horizons at West 72nd"},
+    ]
+
+    target_clean = job.target_child.strip().lower()
+    matching = [
+        c for c in all_children
+        if c.get("name", "").strip().lower() == target_clean or c.get("name", "").strip().lower().startswith(target_clean)
+    ]
+
+    assert len(matching) == 2
+    assert matching[0]["dependent_id"] == "dep_center_1"
+    assert matching[1]["dependent_id"] == "dep_center_2"
+    # Both share the unified child name
+    assert matching[0]["name"] == "Theodore"
+    assert matching[1]["name"] == "Theodore"
+
+
+def test_scraper_engine_unified_child_output_paths():
+    """
+    Verifies that multiple centers for the same child resolve to the same unified media directory.
+    """
+    from backend.security_isolation import resolve_child_output_path
+    base_dir = "/tmp/tenant"
+
+    # Photos from Center 1 and Center 2
+    path_center_1 = resolve_child_output_path(base_dir, "Theodore", "2026-09-01_item1.jpg")
+    path_center_2 = resolve_child_output_path(base_dir, "Theodore", "2026-08-15_item2.jpg")
+
+    assert os.path.dirname(path_center_1) == os.path.dirname(path_center_2)
+    assert os.path.dirname(path_center_1) == "/tmp/tenant/media/Theodore"
+    assert os.path.basename(path_center_1) == "2026-09-01_item1.jpg"
+    assert os.path.basename(path_center_2) == "2026-08-15_item2.jpg"
+
+
+

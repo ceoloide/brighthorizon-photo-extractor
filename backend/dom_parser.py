@@ -720,6 +720,56 @@ def dismiss_cdk_overlays(page: Page):
         pass
 
 
+def discover_children_from_parents_params(page: Page, logger=None) -> List[Dict[str, str]]:
+    """
+    Directly fetches enrolled children across all centers from
+    https://mybrightday.brighthorizons.com/legacy/parents/params.
+
+    Returns list of child profiles with center/location metadata:
+    [
+        {
+            "name": given_name,
+            "given_name": given_name,
+            "full_name": full_name,
+            "dependent_id": child_key,
+            "location_name": location_name,
+            "attachment_key": attachment_key
+        },
+        ...
+    ]
+    """
+    log = logger or (lambda msg: None)
+    children: List[Dict[str, str]] = []
+    try:
+        resp = page.request.get("https://mybrightday.brighthorizons.com/legacy/parents/params", timeout=15000)
+        if resp and resp.ok:
+            data = resp.json()
+            raw_children = data.get("children", [])
+            for c in raw_children:
+                key = c.get("key")
+                fn = (c.get("first_name") or "").strip()
+                ln = (c.get("last_name") or "").strip()
+                loc = (c.get("location_name") or "").strip()
+                att = c.get("attachment")
+                if key and fn:
+                    given = fn.split()[0].capitalize()
+                    full = f"{fn} {ln}".strip()
+                    profile = {
+                        "name": given,
+                        "given_name": given,
+                        "full_name": full,
+                        "dependent_id": key,
+                        "location_name": loc,
+                        "attachment_key": att
+                    }
+                    if not any(x["dependent_id"] == key for x in children):
+                        children.append(profile)
+                        log(f"[Child-Discovery] Discovered child via My Bright Day API: Given='{given}', Full='{full}', ID='{key}', Center='{loc}'")
+    except Exception as e:
+        log(f"[Child-Discovery] Notice querying /legacy/parents/params: {e}")
+    return children
+
+
 def discover_children_from_family_info(page: Page, context: BrowserContext, logger=None) -> List[Dict[str, str]]:
     """
     Discovers enrolled children and dependent_ids following Rule 5 (Angular CDK overlay parsing).
@@ -862,15 +912,27 @@ def discover_children_from_family_info(page: Page, context: BrowserContext, logg
                         page.wait_for_timeout(500)
 
                     if dep_id:
+                        loc_name = ""
+                        try:
+                            for le in card.locator("p, div, span").all():
+                                t = (le.inner_text() or "").strip()
+                                if any(w in t.lower() for w in ["school", "bright horizons", "center", "avenue", "ave", "street", "st"]):
+                                    loc_name = t.split("\n")[0].strip()
+                                    break
+                        except Exception:
+                            pass
+
                         child_profile = {
                             "name": given_name,
                             "given_name": given_name,
                             "full_name": full_name,
-                            "dependent_id": dep_id
+                            "dependent_id": dep_id,
+                            "location_name": loc_name,
                         }
                         if not any(c["dependent_id"] == dep_id for c in children):
                             children.append(child_profile)
-                            log(f"[Child-Discovery] 🎉 DISCOVERED CHILD #{len(children)}: Given Name='{given_name}', Full Name='{full_name}', Dependent ID='{dep_id}'")
+                            center_info = f", Center='{loc_name}'" if loc_name else ""
+                            log(f"[Child-Discovery] 🎉 DISCOVERED CHILD #{len(children)}: Given Name='{given_name}', Full Name='{full_name}', Dependent ID='{dep_id}'{center_info}")
                     else:
                         log(f"[Child-Discovery] ⚠️ WARNING: Opened tab URL for '{given_name}' did NOT contain 'dependent_id=' after polling. Final URL: '{new_page.url}'")
 
