@@ -1164,10 +1164,10 @@ class ScraperJob:
                     pwd_inp_check = page.locator("input[name='password']:not(.hide), input[id='password']").first
                     if pwd_inp_check.count() == 0 or not pwd_inp_check.is_visible():
                         self.log("Submitting email step...")
-                        btn = page.locator("button[type='submit']:not(.ulp-hidden-form-submit-button), button[name='action']:not(.ulp-hidden-form-submit-button), button[data-action-button-primary='true'], button:has-text('Continue'):not(.ulp-hidden-form-submit-button), button:has-text('Next'):not(.ulp-hidden-form-submit-button)").first
+                        btn = page.locator("button[data-action-button-primary='true']:not([aria-hidden='true']), button._button-login-id:not([aria-hidden='true']), button[type='submit']:not([aria-hidden='true']):not([tabindex='-1']):not(.ulp-hidden-form-submit-button), button[name='action']:not([aria-hidden='true']):not([tabindex='-1']), button:has-text('Continue'):not([aria-hidden='true']):not([tabindex='-1']), button:has-text('Next'):not([aria-hidden='true']):not([tabindex='-1'])").first
                         if btn.count() > 0 and btn.is_visible():
                             try:
-                                btn.click(force=True)
+                                btn.click()
                             except Exception:
                                 btn.evaluate("(el) => { if (el.form && el.form.requestSubmit) { try { el.form.requestSubmit(); } catch(e) { el.click(); } } else { el.click(); } }")
                         else:
@@ -1190,10 +1190,10 @@ class ScraperJob:
             if update_progress_cb: update_progress_cb("Submitting password...", 2)
             page.fill("input[name='password']:not(.hide), input[id='password']", self.password)
             self.log("Submitting password step...")
-            btn_pwd = page.locator("button[type='submit']:not(.ulp-hidden-form-submit-button), button[name='action']:not(.ulp-hidden-form-submit-button), button[data-action-button-primary='true'], button:has-text('Continue'):not(.ulp-hidden-form-submit-button), button:has-text('Log In'):not(.ulp-hidden-form-submit-button)").first
+            btn_pwd = page.locator("button[data-action-button-primary='true']:not([aria-hidden='true']), button[type='submit']:not([aria-hidden='true']):not([tabindex='-1']):not(.ulp-hidden-form-submit-button), button[name='action']:not([aria-hidden='true']):not([tabindex='-1']), button:has-text('Log In'):not([aria-hidden='true']):not([tabindex='-1']), button:has-text('Continue'):not([aria-hidden='true']):not([tabindex='-1'])").first
             if btn_pwd.count() > 0 and btn_pwd.is_visible():
                 try:
-                    btn_pwd.click(force=True)
+                    btn_pwd.click()
                 except Exception:
                     btn_pwd.evaluate("(el) => el.click()")
             page.keyboard.press("Enter")
@@ -1240,9 +1240,9 @@ class ScraperJob:
                 mfa_inp.wait_for(state="visible", timeout=10000)
                 self.human_type(page, mfa_inp, code_to_submit)
                 
-                submit_mfa_btn = page.locator("button[type='submit']:not(.ulp-hidden-form-submit-button), button[name='action'], button:has-text('Continue'), button:has-text('Verify')").first
+                submit_mfa_btn = page.locator("button[data-action-button-primary='true']:not([aria-hidden='true']), button[type='submit']:not([aria-hidden='true']):not([tabindex='-1']):not(.ulp-hidden-form-submit-button), button[name='action']:not([aria-hidden='true']):not([tabindex='-1']), button:has-text('Continue'):not([aria-hidden='true']):not([tabindex='-1']), button:has-text('Verify'):not([aria-hidden='true']):not([tabindex='-1'])").first
                 if submit_mfa_btn.count() > 0 and submit_mfa_btn.is_visible():
-                    submit_mfa_btn.click(force=True)
+                    submit_mfa_btn.click()
                 else:
                     mfa_inp.press("Enter")
                     
