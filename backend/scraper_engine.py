@@ -1526,7 +1526,7 @@ class ScraperJob:
         try:
             att_key = child.get("attachment_key")
             page.evaluate("""
-                (depId, attKey) => {
+                ([depId, attKey]) => {
                     const topUl = document.querySelector('div.pull-right ul.thumbnails') || 
                                   Array.from(document.querySelectorAll('ul.thumbnails')).find(u => !u.closest('div.well'));
                     if (!topUl) return true;
@@ -1548,7 +1548,7 @@ class ScraperJob:
                     }
                     return false;
                 }
-            """, dep_id, att_key)
+            """, [dep_id, att_key])
         except Exception as sel_err:
             self.log(f"Child selector verification notice: {sel_err}")
             
