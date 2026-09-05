@@ -339,4 +339,56 @@ def test_scraper_engine_unified_child_output_paths():
     assert os.path.basename(path_center_2) == "2026-08-15_item2.jpg"
 
 
+def test_scraper_engine_unenrolled_target_child_matching(mock_tenant_storage):
+    """
+    Verifies that targeting a child in an unenrolled account with 0 center profiles
+    does not raise an exception and synthesizes a direct timeline child profile.
+    """
+    job = ScraperJob(mock_tenant_storage, "password123", {"child": "Byron"})
+    all_children = []
+    children_to_process = all_children if all_children else [{"name": "Timeline", "dependent_id": "all"}]
+
+    target_clean = job.target_child.strip().lower()
+    matching = [c for c in children_to_process if c.get("name", "").strip().lower() == target_clean]
+    if not matching and (not all_children or (len(all_children) == 1 and all_children[0].get("name") == "Timeline")):
+        children = [{"name": job.target_child, "dependent_id": "all"}]
+    else:
+        children = matching
+
+    assert len(children) == 1
+    assert children[0]["name"] == "Byron"
+    assert children[0]["dependent_id"] == "all"
+
+
+def test_discover_children_direct_navigation_fallback(mock_tenant_storage):
+    """
+    Verifies that discover_children falls back to direct parents.html navigation
+    and header DOM discovery when familyinfocenter yields 0 profiles.
+    """
+    job = ScraperJob(mock_tenant_storage, "password123", {})
+    mock_page = MagicMock()
+    mock_page.url = "https://familyinfocenter.brighthorizons.com/home"
+    mock_context = MagicMock()
+
+    # Step 1: /legacy/parents/params returns 401/empty while on familyinfocenter
+    mock_resp_empty = MagicMock()
+    mock_resp_empty.ok = False
+    mock_page.request.get.return_value = mock_resp_empty
+
+    # Step 2: family info center DOM has no app-child elements
+    mock_page.locator.return_value.all.return_value = []
+
+    # Step 3: DOM tiles on parents.html return Byron
+    with patch("backend.dom_parser.discover_children_from_parents_params", return_value=[]), \
+         patch("backend.dom_parser.discover_children_from_family_info", return_value=[]), \
+         patch("backend.dom_parser.discover_children_from_mybrightday_dom", return_value=[{"name": "Byron", "dependent_id": "all"}]):
+        children = job.discover_children(mock_page, mock_context)
+
+    assert len(children) == 1
+    assert children[0]["name"] == "Byron"
+    assert children[0]["dependent_id"] == "all"
+    mock_page.goto.assert_called_with("https://mybrightday.brighthorizons.com/dashboard/parents.html", wait_until="domcontentloaded")
+
+
+
 

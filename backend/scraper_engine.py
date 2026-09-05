@@ -558,13 +558,14 @@ class ScraperJob:
                 # Trigger SSO token redirect from Family Info Center to My Bright Day if on familyinfocenter
                 if "familyinfocenter" in page.url:
                     self.log("Triggering SSO token redirect from Family Information Center...")
+                    from backend.dom_parser import dismiss_cdk_overlays
                     actions_spans = page.locator("span", has_text="Actions").all()
                     for span in actions_spans:
                         try:
-                            span.click()
-                            time.sleep(1.5)
+                            span.click(timeout=3000)
+                            time.sleep(1.0)
                             mbd = page.locator("span.actions-menu-item-label", has_text="My Bright Day").first
-                            if mbd.is_visible():
+                            if mbd.count() > 0 and mbd.is_visible():
                                 with context.expect_page() as new_page_info:
                                     mbd.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
                                 mbd_page = new_page_info.value
@@ -574,8 +575,22 @@ class ScraperJob:
                                 time.sleep(5.0)
                                 self.log(f"Successfully landed on My Bright Day via SSO: {page.url}")
                                 break
+                            else:
+                                dismiss_cdk_overlays(page)
                         except Exception as e:
                             self.log(f"Actions click attempt note: {e}")
+                            dismiss_cdk_overlays(page)
+
+                    # Fallback: if children are unenrolled and no "My Bright Day" was found
+                    if "parents.html" not in page.url and "familyinfocenter" in page.url:
+                        dismiss_cdk_overlays(page)
+                        self.log("No active 'My Bright Day' link found in Actions menu (children may be unenrolled). Navigating directly to https://mybrightday.brighthorizons.com/dashboard/parents.html...")
+                        try:
+                            page.goto("https://mybrightday.brighthorizons.com/dashboard/parents.html", wait_until="domcontentloaded")
+                            time.sleep(4.0)
+                            self.log(f"Direct navigation landed on: {page.url}")
+                        except Exception as nav_err:
+                            self.log(f"Direct navigation notice: {nav_err}")
 
                 if "login" not in page.url and ("parents.html" in page.url or "familyinfocenter" in page.url or "brighthorizons" in page.url):
                     self.log("Authenticated portal page verified via saved session!")
@@ -606,8 +621,6 @@ class ScraperJob:
                     self.status["current_step"] = "Discovering enrolled children"
                     self.log("Enrolled children list is empty; executing automatic child rediscovery step...")
                     try:
-                        page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
-                        time.sleep(3.0)
                         rediscovered = self.discover_children(page, context)
                         if rediscovered:
                             all_children = rediscovered
@@ -628,8 +641,11 @@ class ScraperJob:
                         children = matching
                         centers_desc = ", ".join(c.get("location_name", "Center") for c in matching if c.get("location_name"))
                         self.log(f"Target child '{matching[0]['name']}' selected ({len(matching)} center profile(s): {centers_desc or 'Default'}). Processing all center feeds.")
+                    elif not all_children or (len(all_children) == 1 and all_children[0].get("name") == "Timeline"):
+                        self.log(f"Target child '{self.target_child}' specified for account with 0 active center profiles. Processing direct timeline feed.")
+                        children = [{"name": self.target_child, "dependent_id": "all"}]
                     else:
-                        raise Exception(f"Selected target child '{self.target_child}' was not found among enrolled children.")
+                        raise Exception(f"Selected target child '{self.target_child}' was not found among enrolled children: {[c.get('name') for c in all_children]}")
                 else:
                     children = children_to_process
 
@@ -834,13 +850,14 @@ class ScraperJob:
         # Trigger SSO redirect via child card My Bright Day link
         handshake_success = False
         try:
+            from backend.dom_parser import dismiss_cdk_overlays
             actions_spans = page.locator("span", has_text="Actions").all()
             for span in actions_spans:
                 try:
-                    span.click()
+                    span.click(timeout=3000)
                     page.wait_for_timeout(1000)
                     mbd = page.locator("span.actions-menu-item-label", has_text="My Bright Day").first
-                    if mbd.is_visible():
+                    if mbd.count() > 0 and mbd.is_visible():
                         with context.expect_page() as new_page_info:
                             mbd.evaluate("(el) => (el.closest('a') || el.closest('button') || el).click()")
                         mbd_page = new_page_info.value
@@ -849,15 +866,22 @@ class ScraperJob:
                         handshake_success = True
                         mbd_page.close()
                         break
+                    else:
+                        dismiss_cdk_overlays(page)
                 except Exception as e:
                     self.log(f"SSO handshake click notice: {e}")
+                    dismiss_cdk_overlays(page)
         except Exception as e:
             self.log(f"SSO handshake locator notice: {e}")
 
-        if not handshake_success and dependent_id:
-            # Fallback: Navigate directly with dependent_id
+        if not handshake_success:
+            # Fallback: Navigate directly to My Bright Day dashboard
             try:
-                page.goto(f"https://mybrightday.brighthorizons.com/dashboard/parents.html?dependent_id={dependent_id}", wait_until="domcontentloaded")
+                from backend.dom_parser import dismiss_cdk_overlays
+                dismiss_cdk_overlays(page)
+                target_mbd = f"https://mybrightday.brighthorizons.com/dashboard/parents.html?dependent_id={dependent_id}" if dependent_id else "https://mybrightday.brighthorizons.com/dashboard/parents.html"
+                self.log(f"No active 'My Bright Day' link in Family Info Center; navigating directly to {target_mbd}...")
+                page.goto(target_mbd, wait_until="domcontentloaded")
                 page.wait_for_timeout(3000)
             except Exception as e:
                 self.log(f"Direct fallback navigation notice: {e}")
@@ -1360,9 +1384,10 @@ class ScraperJob:
                 self.log(f"Child auto-discovery on Family Info Center skipped: {disc_err}")
                 
             if not children:
-                # Load cached children from tenant manifest if present
+                # Load cached children from tenant config or manifest if present
+                config = self.tenant_storage.load_config()
                 manifest = self.tenant_storage.load_manifest()
-                children = manifest.get("children", [])
+                children = config.get("children") or manifest.get("children", [])
                 
             if not children:
                 # Default child list from known dependent IDs
@@ -1487,20 +1512,52 @@ class ScraperJob:
         """
         Discovers enrolled children across all centers.
         First queries /legacy/parents/params for comprehensive multi-center profiles,
-        then falls back to Family Info Center Angular DOM discovery if needed.
+        then falls back to Family Info Center Angular DOM discovery if needed,
+        and finally to direct My Bright Day navigation and Knockout header DOM discovery.
         """
         try:
-            from backend.dom_parser import discover_children_from_parents_params, discover_children_from_family_info
+            from backend.dom_parser import (
+                discover_children_from_parents_params,
+                discover_children_from_family_info,
+                discover_children_from_mybrightday_dom
+            )
 
-            # Fast path: query /legacy/parents/params directly
+            # Fast path 1: query /legacy/parents/params directly
             discovered = discover_children_from_parents_params(page, logger=self.log)
             if discovered:
                 self.log(f"Child auto-discovery via My Bright Day API found {len(discovered)} profile(s): {[(c['name'], c.get('location_name', '')) for c in discovered]}")
                 return discovered
 
+            # Fast path 2: If on parents.html, check DOM child selector tiles
+            if "parents.html" in page.url or "mybrightday" in page.url:
+                dom_discovered = discover_children_from_mybrightday_dom(page, logger=self.log)
+                if dom_discovered:
+                    self.log(f"Child auto-discovery via My Bright Day header DOM found {len(dom_discovered)} profile(s): {[c['name'] for c in dom_discovered]}")
+                    return dom_discovered
+
+            # Path 3: Family Info Center Angular discovery
             discovered = discover_children_from_family_info(page, context, logger=self.log)
             if discovered:
                 return discovered
+
+            # Path 4: If on familyinfocenter and 0 profiles were found (e.g. unenrolled children),
+            # navigate directly to My Bright Day dashboard and retry discovery
+            if "parents.html" not in page.url:
+                self.log("Child auto-discovery on Family Info Center yielded 0 active profiles (children may be unenrolled). Attempting direct discovery on My Bright Day...")
+                try:
+                    page.goto("https://mybrightday.brighthorizons.com/dashboard/parents.html", wait_until="domcontentloaded")
+                    time.sleep(3.0)
+                    discovered = discover_children_from_parents_params(page, logger=self.log)
+                    if discovered:
+                        self.log(f"Child auto-discovery via My Bright Day API found {len(discovered)} profile(s): {[(c['name'], c.get('location_name', '')) for c in discovered]}")
+                        return discovered
+                    dom_discovered = discover_children_from_mybrightday_dom(page, logger=self.log)
+                    if dom_discovered:
+                        self.log(f"Child auto-discovery via My Bright Day header DOM found {len(dom_discovered)} profile(s): {[c['name'] for c in dom_discovered]}")
+                        return dom_discovered
+                except Exception as mbd_err:
+                    self.log(f"Notice during direct My Bright Day discovery: {mbd_err}")
+
         except Exception as e:
             self.log(f"Child auto-discovery notice: {e}")
 
@@ -1510,12 +1567,15 @@ class ScraperJob:
     def extract_child_feed(self, page: Page, context: BrowserContext, child: Dict[str, str]):
         """Navigates child timeline, handles timeframe links, and extracts all feed items."""
         child_name = child["name"]
-        dep_id = child["dependent_id"]
+        dep_id = child.get("dependent_id")
         loc_name = child.get("location_name") or ""
         center_tag = f" [{loc_name}]" if loc_name else ""
 
         self.log(f"Processing feed for {child_name}{center_tag} (ID: {dep_id}) (Sync Mode: {self.sync_mode.upper()})...")
-        url = f"https://mybrightday.brighthorizons.com/dashboard/parents.html?dependent_id={dep_id}"
+        if dep_id and dep_id != "all":
+            url = f"https://mybrightday.brighthorizons.com/dashboard/parents.html?dependent_id={dep_id}"
+        else:
+            url = "https://mybrightday.brighthorizons.com/dashboard/parents.html"
         page.goto(url, wait_until="domcontentloaded")
         time.sleep(3.0)
 

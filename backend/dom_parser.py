@@ -770,6 +770,54 @@ def discover_children_from_parents_params(page: Page, logger=None) -> List[Dict[
     return children
 
 
+def discover_children_from_mybrightday_dom(page: Page, logger=None) -> List[Dict[str, str]]:
+    """
+    Parses child selector tiles rendered directly in the header of
+    https://mybrightday.brighthorizons.com/dashboard/parents.html.
+
+    Returns list of discovered child profiles:
+    [{'name': 'Byron', 'given_name': 'Byron', 'full_name': 'Byron', 'dependent_id': 'all', 'attachment_key': '...'}, ...]
+    """
+    log = logger or (lambda msg: None)
+    children: List[Dict[str, str]] = []
+    try:
+        raw_tiles = page.evaluate("""
+            () => {
+                const topUl = document.querySelector('div.pull-right ul.thumbnails') || 
+                              Array.from(document.querySelectorAll('ul.thumbnails')).find(u => !u.closest('div.well'));
+                if (!topUl) return [];
+                const tiles = Array.from(topUl.querySelectorAll('li'));
+                return tiles.map(li => {
+                    const tile = li.querySelector('div.tile') || li;
+                    const attKey = tile.getAttribute('data-attachment-key') || '';
+                    const text = (li.innerText || li.textContent || '').trim();
+                    const img = li.querySelector('img');
+                    const imgAlt = img ? (img.getAttribute('alt') || img.getAttribute('title') || '') : '';
+                    return { text, imgAlt, attKey };
+                });
+            }
+        """)
+        for item in raw_tiles:
+            name = (item.get("text") or item.get("imgAlt") or "").strip()
+            name = name.split("\n")[0].strip()
+            att_key = item.get("attKey") or ""
+            if name and name.lower() not in ("all", "all kids", "all children", "timeline"):
+                given = name.split()[0].capitalize()
+                profile = {
+                    "name": given,
+                    "given_name": given,
+                    "full_name": name,
+                    "dependent_id": "all",
+                    "attachment_key": att_key or None
+                }
+                if not any(x["name"].lower() == given.lower() for x in children):
+                    children.append(profile)
+                    log(f"[Child-Discovery] Discovered child via My Bright Day header DOM: Name='{given}', AttKey='{att_key}'")
+    except Exception as e:
+        log(f"[Child-Discovery] Notice querying My Bright Day DOM tiles: {e}")
+    return children
+
+
 def discover_children_from_family_info(page: Page, context: BrowserContext, logger=None) -> List[Dict[str, str]]:
     """
     Discovers enrolled children and dependent_ids following Rule 5 (Angular CDK overlay parsing).

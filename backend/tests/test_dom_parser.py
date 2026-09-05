@@ -322,4 +322,26 @@ def test_discover_children_from_parents_params_multi_center():
     assert alices[0]["dependent_id"] == "6a84c09187e6316a97724f9a"
 
 
+def test_discover_children_from_mybrightday_dom():
+    from backend.dom_parser import discover_children_from_mybrightday_dom
+    mock_page = MagicMock()
+    mock_page.evaluate.return_value = [
+        {"text": "All Kids", "imgAlt": "", "attKey": ""},
+        {"text": "Byron", "imgAlt": "", "attKey": "att123"},
+        {"text": "", "imgAlt": "Catherine", "attKey": "att456"},
+        {"text": "Timeline", "imgAlt": "", "attKey": ""},
+        {"text": "", "imgAlt": "", "attKey": ""}
+    ]
+
+    children = discover_children_from_mybrightday_dom(mock_page)
+    assert len(children) == 2
+    assert children[0]["name"] == "Byron"
+    assert children[0]["attachment_key"] == "att123"
+    assert children[0]["dependent_id"] == "all"
+    assert children[1]["name"] == "Catherine"
+    assert children[1]["attachment_key"] == "att456"
+    assert children[1]["dependent_id"] == "all"
+
+
+
 
