@@ -343,5 +343,59 @@ def test_discover_children_from_mybrightday_dom():
     assert children[1]["dependent_id"] == "all"
 
 
+def test_exchange_mbd_jwt_token_success():
+    from backend.dom_parser import exchange_mbd_jwt_token
+    mock_page = MagicMock()
+    mock_page.url = "https://familyinfocenter.brighthorizons.com/home"
+
+    # evaluate called twice: first for token from localStorage, second for fetch to gateway
+    mock_page.evaluate.side_effect = [
+        "auth0_access_token_123",
+        {"ok": True, "token": "jwt_token_xyz"}
+    ]
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_page.request.get.return_value = mock_resp
+
+    logs = []
+    res = exchange_mbd_jwt_token(mock_page, dependent_id="dep_456", logger=logs.append)
+    assert res is True
+    assert any("Successfully minted fresh MBD JWT" in l for l in logs)
+    assert any("Successfully established authenticated session" in l for l in logs)
+    mock_page.goto.assert_called()
+    called_url = mock_page.goto.call_args[0][0]
+    assert "https://mybrightday.brighthorizons.com/auth/jwt/redirect" in called_url
+    assert "jwt=jwt_token_xyz" in called_url
+    assert "childid=dep_456" in called_url
+
+
+def test_exchange_mbd_jwt_token_missing_token():
+    from backend.dom_parser import exchange_mbd_jwt_token
+    mock_page = MagicMock()
+    mock_page.url = "https://familyinfocenter.brighthorizons.com/home"
+    mock_page.evaluate.return_value = None
+
+    logs = []
+    res = exchange_mbd_jwt_token(mock_page, logger=logs.append)
+    assert res is False
+    assert any("No access_token found" in l for l in logs)
+
+
+def test_exchange_mbd_jwt_token_gateway_failure():
+    from backend.dom_parser import exchange_mbd_jwt_token
+    mock_page = MagicMock()
+    mock_page.url = "https://familyinfocenter.brighthorizons.com/home"
+    mock_page.evaluate.side_effect = [
+        "auth0_access_token_123",
+        {"ok": False, "status": 401, "text": "Unauthorized"}
+    ]
+
+    logs = []
+    res = exchange_mbd_jwt_token(mock_page, logger=logs.append)
+    assert res is False
+    assert any("Gateway mbdtoken request failed" in l for l in logs)
+
+
+
 
 

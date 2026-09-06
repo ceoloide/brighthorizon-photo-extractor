@@ -1122,3 +1122,127 @@ def discover_children_from_family_info(page: Page, context: BrowserContext, logg
 
     log(f"[Child-Discovery] Summary: Discovered {len(children)} active child profile(s): {[c['name'] for c in children]}")
     return children
+
+
+def exchange_mbd_jwt_token(
+    page: Any,
+    dependent_id: Optional[str] = None,
+    logger: Optional[Callable[[str], None]] = None
+) -> bool:
+    """
+    Executes automated SSO JWT token exchange from Family Information Center to My Bright Day.
+    Replicates the exact Angular Redirect2MBD flow:
+    1. Extracts the active Auth0 Bearer access_token from localStorage.
+    2. Calls GET https://mbdwgateway.brighthorizons.com/api/account/mbdtoken to mint a fresh MBD JWT.
+    3. Navigates to https://mybrightday.brighthorizons.com/auth/jwt/redirect?url=&jwt={token}&childid={dep_id}.
+    4. Verifies that the 'session' cookie is set and /legacy/parents/params returns 200.
+    """
+    def log(msg: str):
+        if logger:
+            logger(msg)
+
+    log("[SSO-Exchange] Initiating automated SSO JWT token exchange for My Bright Day...")
+
+    # Ensure we are on familyinfocenter to access origin localStorage and API gateway
+    current_url = getattr(page, "url", "").lower()
+    if "familyinfocenter" not in current_url:
+        log("[SSO-Exchange] Page not on Family Information Center; navigating to home portal...")
+        try:
+            page.goto("https://familyinfocenter.brighthorizons.com/home", wait_until="domcontentloaded")
+            time.sleep(3.0)
+        except Exception as nav_err:
+            log(f"[SSO-Exchange] Notice navigating to portal home: {nav_err}")
+
+    # Step 1: Extract active Bearer token from page context
+    try:
+        token = page.evaluate("""() => {
+            let t = localStorage.getItem('access_token');
+            if (t) return t;
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && (k.includes('ShareservicesAPI') || k.includes('auth0spajs'))) {
+                    try {
+                        const parsed = JSON.parse(localStorage.getItem(k));
+                        if (parsed?.body?.access_token) return parsed.body.access_token;
+                        if (parsed?.access_token) return parsed.access_token;
+                    } catch(e) {}
+                }
+            }
+            return null;
+        }""")
+    except Exception as eval_err:
+        log(f"[SSO-Exchange] Error extracting access token: {eval_err}")
+        token = None
+
+    if not token:
+        log("[SSO-Exchange] ⚠️ No access_token found in portal localStorage.")
+        return False
+
+    log("[SSO-Exchange] Successfully acquired Auth0 Bearer token from portal state.")
+
+    # Step 2: Query account/mbdtoken to mint fresh MBD JWT
+    try:
+        gateway_res = page.evaluate("""async (token) => {
+            try {
+                const resp = await fetch('https://mbdwgateway.brighthorizons.com/api/account/mbdtoken', {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Accept': 'application/json'
+                    }
+                });
+                if (!resp.ok) {
+                    return { ok: false, status: resp.status, text: await resp.text() };
+                }
+                const data = await resp.json();
+                return { ok: true, token: data.token };
+            } catch (e) {
+                return { ok: false, error: String(e) };
+            }
+        }""", token)
+    except Exception as fetch_err:
+        log(f"[SSO-Exchange] Error requesting MBD JWT from gateway: {fetch_err}")
+        return False
+
+    if not gateway_res or not gateway_res.get("ok") or not gateway_res.get("token"):
+        err_detail = gateway_res.get("error") or gateway_res.get("text") or f"status {gateway_res.get('status')}"
+        log(f"[SSO-Exchange] Gateway mbdtoken request failed: {err_detail}")
+        return False
+
+    mbd_jwt = gateway_res["token"]
+    log("[SSO-Exchange] Successfully minted fresh MBD JWT from account gateway!")
+
+    # Step 3: Navigate to JWT redirect endpoint
+    redirect_url = f"https://mybrightday.brighthorizons.com/auth/jwt/redirect?url=&jwt={mbd_jwt}"
+    if dependent_id and dependent_id != "all":
+        redirect_url += f"&childid={dependent_id}"
+
+    log(f"[SSO-Exchange] Navigating to JWT redirect bridge: {redirect_url[:80]}...")
+    try:
+        page.goto(redirect_url, wait_until="domcontentloaded")
+        time.sleep(4.0)
+    except Exception as red_err:
+        log(f"[SSO-Exchange] Notice during redirect navigation: {red_err}")
+
+    # Step 4: Verify authenticated session on My Bright Day
+    try:
+        resp = page.request.get("https://mybrightday.brighthorizons.com/legacy/parents/params", timeout=8000)
+        if resp.status == 200:
+            log(f"[SSO-Exchange] 🎉 Successfully established authenticated session on My Bright Day! (Landed on: {page.url})")
+            return True
+        else:
+            log(f"[SSO-Exchange] Verification of /legacy/parents/params returned HTTP {resp.status}.")
+    except Exception as verify_err:
+        log(f"[SSO-Exchange] Verification notice: {verify_err}")
+
+    # Fallback check: user_payload endpoint
+    try:
+        resp2 = page.request.get("https://mybrightday.brighthorizons.com/remote/v1/user_payload", timeout=5000)
+        if resp2.status == 200:
+            log("[SSO-Exchange] 🎉 Valid My Bright Day session confirmed via user_payload!")
+            return True
+    except Exception:
+        pass
+
+    return False
+
