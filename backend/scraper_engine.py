@@ -587,7 +587,13 @@ class ScraperJob:
                         self.log("No active 'My Bright Day' link found in Actions menu (children may be unenrolled). Executing automated SSO token exchange...")
                         from backend.dom_parser import exchange_mbd_jwt_token
                         sso_ok = exchange_mbd_jwt_token(page, logger=self.log)
-                        if not sso_ok:
+                        if sso_ok:
+                            try:
+                                context.storage_state(path=state_file)
+                                self.log("Persisted fresh SSO session cookies to storage_state.json")
+                            except Exception as ss_err:
+                                self.log(f"Notice persisting storage_state: {ss_err}")
+                        else:
                             self.log("SSO token exchange note: attempting direct navigation fallback...")
                             try:
                                 page.goto("https://mybrightday.brighthorizons.com/dashboard/parents.html", wait_until="domcontentloaded")
@@ -1917,13 +1923,19 @@ class ScraperJob:
 
                 session_cookies = {}
                 try:
-                    state_path = os.path.join(self.tenant_storage.tenant_dir, "user_data", "storage_state.json")
-                    if os.path.exists(state_path):
-                        with open(state_path, "r", encoding="utf-8") as sf:
-                            st = json.load(sf)
-                            session_cookies = {c["name"]: c["value"] for c in st.get("cookies", [])}
+                    for c in context.cookies():
+                        session_cookies[c["name"]] = c["value"]
                 except Exception:
                     pass
+                if not session_cookies:
+                    try:
+                        state_path = os.path.join(self.tenant_storage.tenant_dir, "user_data", "storage_state.json")
+                        if os.path.exists(state_path):
+                            with open(state_path, "r", encoding="utf-8") as sf:
+                                st = json.load(sf)
+                                session_cookies = {c["name"]: c["value"] for c in st.get("cookies", [])}
+                    except Exception:
+                        pass
 
                 file_bytes = None
                 mime_type = "video/mp4" if is_vid else "image/jpeg"
