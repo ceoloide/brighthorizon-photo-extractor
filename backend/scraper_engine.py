@@ -584,13 +584,23 @@ class ScraperJob:
                     # Fallback: if children are unenrolled and no "My Bright Day" was found
                     if "parents.html" not in page.url and "familyinfocenter" in page.url:
                         dismiss_cdk_overlays(page)
-                        self.log("No active 'My Bright Day' link found in Actions menu (children may be unenrolled). Navigating directly to https://mybrightday.brighthorizons.com/dashboard/parents.html...")
-                        try:
-                            page.goto("https://mybrightday.brighthorizons.com/dashboard/parents.html", wait_until="domcontentloaded")
-                            time.sleep(4.0)
-                            self.log(f"Direct navigation landed on: {page.url}")
-                        except Exception as nav_err:
-                            self.log(f"Direct navigation notice: {nav_err}")
+                        self.log("No active 'My Bright Day' link found in Actions menu (children may be unenrolled). Executing automated SSO token exchange...")
+                        from backend.dom_parser import exchange_mbd_jwt_token
+                        sso_ok = exchange_mbd_jwt_token(page, logger=self.log)
+                        if sso_ok:
+                            try:
+                                context.storage_state(path=state_file)
+                                self.log("Persisted fresh SSO session cookies to storage_state.json")
+                            except Exception as ss_err:
+                                self.log(f"Notice persisting storage_state: {ss_err}")
+                        else:
+                            self.log("SSO token exchange note: attempting direct navigation fallback...")
+                            try:
+                                page.goto("https://mybrightday.brighthorizons.com/dashboard/parents.html", wait_until="domcontentloaded")
+                                time.sleep(4.0)
+                            except Exception as nav_err:
+                                self.log(f"Direct navigation notice: {nav_err}")
+                        self.log(f"Portal handoff landed on: {page.url}")
 
                 if "login" not in page.url and ("parents.html" in page.url or "familyinfocenter" in page.url or "brighthorizons" in page.url):
                     self.log("Authenticated portal page verified via saved session!")
@@ -875,14 +885,17 @@ class ScraperJob:
             self.log(f"SSO handshake locator notice: {e}")
 
         if not handshake_success:
-            # Fallback: Navigate directly to My Bright Day dashboard
+            # Fallback: Execute automated SSO JWT token exchange
             try:
-                from backend.dom_parser import dismiss_cdk_overlays
+                from backend.dom_parser import dismiss_cdk_overlays, exchange_mbd_jwt_token
                 dismiss_cdk_overlays(page)
-                target_mbd = f"https://mybrightday.brighthorizons.com/dashboard/parents.html?dependent_id={dependent_id}" if dependent_id else "https://mybrightday.brighthorizons.com/dashboard/parents.html"
-                self.log(f"No active 'My Bright Day' link in Family Info Center; navigating directly to {target_mbd}...")
-                page.goto(target_mbd, wait_until="domcontentloaded")
-                page.wait_for_timeout(3000)
+                self.log("Actions menu handshake unavailable; executing automated SSO JWT token exchange...")
+                handshake_success = exchange_mbd_jwt_token(page, dependent_id=dependent_id, logger=self.log)
+                if not handshake_success:
+                    target_mbd = f"https://mybrightday.brighthorizons.com/dashboard/parents.html?dependent_id={dependent_id}" if dependent_id else "https://mybrightday.brighthorizons.com/dashboard/parents.html"
+                    self.log(f"SSO exchange note: navigating directly to {target_mbd}...")
+                    page.goto(target_mbd, wait_until="domcontentloaded")
+                    page.wait_for_timeout(3000)
             except Exception as e:
                 self.log(f"Direct fallback navigation notice: {e}")
 
@@ -1541,11 +1554,14 @@ class ScraperJob:
                 return discovered
 
             # Path 4: If on familyinfocenter and 0 profiles were found (e.g. unenrolled children),
-            # navigate directly to My Bright Day dashboard and retry discovery
+            # execute automated SSO JWT token exchange to authenticate on My Bright Day before discovering
             if "parents.html" not in page.url:
-                self.log("Child auto-discovery on Family Info Center yielded 0 active profiles (children may be unenrolled). Attempting direct discovery on My Bright Day...")
+                self.log("Child auto-discovery on Family Info Center yielded 0 active profiles (children may be unenrolled). Executing SSO token exchange for My Bright Day discovery...")
                 try:
-                    page.goto("https://mybrightday.brighthorizons.com/dashboard/parents.html", wait_until="domcontentloaded")
+                    from backend.dom_parser import exchange_mbd_jwt_token
+                    sso_ok = exchange_mbd_jwt_token(page, logger=self.log)
+                    if not sso_ok:
+                        page.goto("https://mybrightday.brighthorizons.com/dashboard/parents.html", wait_until="domcontentloaded")
                     time.sleep(3.0)
                     discovered = discover_children_from_parents_params(page, logger=self.log)
                     if discovered:
@@ -1885,6 +1901,23 @@ class ScraperJob:
 
             self.log(f"Starting parallel download for {len(download_queue)} items in timeframe {tf_text}...")
 
+            # Extract session cookies on the main Playwright thread before concurrent worker execution
+            session_cookies = {}
+            try:
+                for c in context.cookies():
+                    session_cookies[c["name"]] = c["value"]
+            except Exception:
+                pass
+            if not session_cookies:
+                try:
+                    state_path = os.path.join(self.tenant_storage.tenant_dir, "user_data", "storage_state.json")
+                    if os.path.exists(state_path):
+                        with open(state_path, "r", encoding="utf-8") as sf:
+                            st = json.load(sf)
+                            session_cookies = {c["name"]: c["value"] for c in st.get("cookies", [])}
+                except Exception:
+                    pass
+
             # Concurrent Multi-Threaded Task Execution (max_workers=32 for high throughput downloads)
             def _download_task(task_info):
                 if self._cancelled:
@@ -1904,16 +1937,6 @@ class ScraperJob:
                     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
                     "Referer": "https://mybrightday.brighthorizons.com/dashboard/parents.html"
                 }
-
-                session_cookies = {}
-                try:
-                    state_path = os.path.join(self.tenant_storage.tenant_dir, "user_data", "storage_state.json")
-                    if os.path.exists(state_path):
-                        with open(state_path, "r", encoding="utf-8") as sf:
-                            st = json.load(sf)
-                            session_cookies = {c["name"]: c["value"] for c in st.get("cookies", [])}
-                except Exception:
-                    pass
 
                 file_bytes = None
                 mime_type = "video/mp4" if is_vid else "image/jpeg"
