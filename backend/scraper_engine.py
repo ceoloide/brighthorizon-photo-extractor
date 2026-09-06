@@ -1901,6 +1901,23 @@ class ScraperJob:
 
             self.log(f"Starting parallel download for {len(download_queue)} items in timeframe {tf_text}...")
 
+            # Extract session cookies on the main Playwright thread before concurrent worker execution
+            session_cookies = {}
+            try:
+                for c in context.cookies():
+                    session_cookies[c["name"]] = c["value"]
+            except Exception:
+                pass
+            if not session_cookies:
+                try:
+                    state_path = os.path.join(self.tenant_storage.tenant_dir, "user_data", "storage_state.json")
+                    if os.path.exists(state_path):
+                        with open(state_path, "r", encoding="utf-8") as sf:
+                            st = json.load(sf)
+                            session_cookies = {c["name"]: c["value"] for c in st.get("cookies", [])}
+                except Exception:
+                    pass
+
             # Concurrent Multi-Threaded Task Execution (max_workers=32 for high throughput downloads)
             def _download_task(task_info):
                 if self._cancelled:
@@ -1920,22 +1937,6 @@ class ScraperJob:
                     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
                     "Referer": "https://mybrightday.brighthorizons.com/dashboard/parents.html"
                 }
-
-                session_cookies = {}
-                try:
-                    for c in context.cookies():
-                        session_cookies[c["name"]] = c["value"]
-                except Exception:
-                    pass
-                if not session_cookies:
-                    try:
-                        state_path = os.path.join(self.tenant_storage.tenant_dir, "user_data", "storage_state.json")
-                        if os.path.exists(state_path):
-                            with open(state_path, "r", encoding="utf-8") as sf:
-                                st = json.load(sf)
-                                session_cookies = {c["name"]: c["value"] for c in st.get("cookies", [])}
-                    except Exception:
-                        pass
 
                 file_bytes = None
                 mime_type = "video/mp4" if is_vid else "image/jpeg"
